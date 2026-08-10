@@ -11,7 +11,7 @@ import { UsersModule } from './users/users.module';
     MikroOrmModule.forRoot({
       entities: ['./dist/entities'],
       entitiesTs: ['./src/entities'],
-      dbName: 'my-db-name.sqlite3',
+      dbName: 'lis_db',
       driver: PostgreSqlDriver,
     }),
     UsersModule,
