@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "LIS · Indoor Intelligence",
+    "slug": "lis-indoor-positioning",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "scheme": "lis",
+    "ios": { "bundleIdentifier": "app.lis.indoor" },
+    "android": {
+      "package": "app.lis.indoor",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_WIFI_STATE", "CHANGE_WIFI_STATE"]
+    },
+    "web": { "bundler": "metro", "name": "LIS · Wi-Fi Scanner" },
+    "plugins": ["react-native-wifi-reborn"]
+  }
+}

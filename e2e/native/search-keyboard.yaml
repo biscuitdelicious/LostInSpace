@@ -1,0 +1,24 @@
+# Run after opening the shopper build in Expo Go. No storage is cleared.
+appId: host.exp.Exponent
+---
+- tapOn:
+    text: "End route"
+    optional: true
+- tapOn:
+    text: "Clear product search"
+    optional: true
+- tapOn: "Search store products"
+# inputText makes the simulator show its software keyboard even when the
+# host hardware keyboard is connected; erase the setup character first.
+- inputText: "x"
+- eraseText
+# Tap real lowercase software keys: inputText/paste would bypass capitalization.
+- tapOn: "^m$"
+- tapOn: "^i$"
+- tapOn: "^l$"
+- tapOn: "^k$"
+- extendedWaitUntil:
+    visible: "Select product Whole Milk 1L, Aisle 7, left, middle shelf"
+    timeout: 10000
+- assertVisible: "^q$"
+# Leave the keyboard open for the hierarchy geometry check.

@@ -1,0 +1,9 @@
+appId: host.exp.Exponent
+---
+# One tap must select the product, not just dismiss the keyboard.
+- tapOn: "Select product Whole Milk 1L, Aisle 7, left, middle shelf"
+- assertVisible: "Route banner"
+- assertNotVisible: "^q$"
+- assertVisible: "End route"
+- tapOn: "End route"
+- assertVisible: "Search store products"
