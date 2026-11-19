@@ -1,6 +1,6 @@
 import { test, expect, allowHttpErrors, networkRows, openScanner, readStaffCredentials, runScan, signInStaff, testApiUrl } from './fixtures';
 import { chipOverRoute, completeShoppingList, cancelShoppingList, shoppingListSurvivesReload } from './shopping';
-import { reportMovedProduct } from './reports';
+import { reportMovedProduct, reportSearchedProduct } from './reports';
 import { aisleNamesStayReadableAroundShopper, forgetTappedLocationOnEndFinishAndAfterHour, setLocationByTapping } from './positioning';
 
 test.beforeEach(async ({ page }) => {
@@ -265,6 +265,10 @@ test('a second iPhone signs in while another device is locked out on the same st
 
 test('Not here: pick aisle, side, and shelf; the route and saved lists follow the move on iPhone', async ({ page }) => {
   await reportMovedProduct(page);
+});
+
+test('Not here on a searched product refreshes the route once for the new shelf on iPhone, without a request flood', async ({ page }) => {
+  await reportSearchedProduct(page);
 });
 
 test('scanner heading and cards stay within mobile and tablet viewports', async ({ page }) => {

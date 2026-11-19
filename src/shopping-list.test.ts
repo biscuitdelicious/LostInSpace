@@ -4,6 +4,7 @@ import { FALLBACK_PRODUCTS } from './products';
 import { ENTRANCE_POINT, aisleCenterX, type MapPoint } from './route';
 import {
   EMPTY_SHOPPING_STATE,
+  keepStableProduct,
   productForShopper,
   remainingTripDistance,
   shoppingReducer,
@@ -181,6 +182,28 @@ test('a newer report is not dropped when an older one is decided', () => {
   assert.equal(synced, state);
   assert.equal(synced.reports[coffee.id].reportId, 42);
   assert.deepEqual(productForShopper(coffee, FALLBACK_PRODUCTS, state.reports).aisleNumber, 2);
+});
+
+test('a searched product with a pending report keeps one object identity, so its route is planned once', () => {
+  const reports = { [coffee.id]: { reportId: 41, seenAt: aisle3 } };
+  // Each merge builds a fresh object (the report moves the product), which
+  // is what made the route effect refetch on every render.
+  const first = productForShopper(coffee, FALLBACK_PRODUCTS, reports);
+  const second = productForShopper(coffee, FALLBACK_PRODUCTS, reports);
+  assert.notEqual(first, second);
+  assert.deepEqual(first, second);
+  // keepStableProduct hands back the previous object while the data matches.
+  const stable = keepStableProduct(null, first);
+  assert.equal(stable, first);
+  assert.equal(keepStableProduct(stable, second), stable);
+  // A fresh catalogue array (the 20-second store sync) does not change it.
+  const afterSync = productForShopper(coffee, [...FALLBACK_PRODUCTS], reports);
+  assert.equal(keepStableProduct(stable, afterSync), stable);
+  // A real move (or clearing the report) does produce a new object.
+  const moved = productForShopper(coffee, FALLBACK_PRODUCTS, {});
+  assert.notEqual(keepStableProduct(stable, moved), stable);
+  assert.equal(keepStableProduct(stable, null), null);
+  assert.equal(keepStableProduct(null, null), null);
 });
 
 test('a manual position replaces the current trip origin and rejects stale route answers', () => {

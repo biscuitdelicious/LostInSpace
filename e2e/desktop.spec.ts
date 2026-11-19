@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { test, expect, allowHttpErrors, demoLabels, expectNetworks, networkRows, openScanner, readStaffCredentials, resolveTestApiUrl, runScan, signInStaff, testApiUrl } from './fixtures';
 import { completeShoppingList, cancelShoppingList, shoppingListSurvivesReload } from './shopping';
-import { reportMovedProduct } from './reports';
+import { reportMovedProduct, reportSearchedProduct } from './reports';
 import { aisleNamesStayReadableAroundShopper, forgetTappedLocationOnEndFinishAndAfterHour, setLocationByTapping, tapShopperPoint } from './positioning';
 import type { MapPoint } from '../src/route';
 
@@ -593,6 +593,10 @@ test('a mid-trip tap replans the current list leg from that spot without changin
 
 test('Not here: pick aisle, side, and shelf; the route and saved lists follow the move on desktop', async ({ page }) => {
   await reportMovedProduct(page);
+});
+
+test('Not here on a searched product refreshes the route once for the new shelf, without a request flood', async ({ page }) => {
+  await reportSearchedProduct(page);
 });
 
 type WalkNodePayload = { id: number; mapX: number; mapY: number; label: string };

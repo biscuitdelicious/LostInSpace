@@ -254,10 +254,8 @@ async function openStaffReports(page: Page) {
   await expect(page.getByLabel('Location reports list', { exact: true })).toBeVisible();
 }
 
-/** Shared on desktop and iPhone-sized browser viewports. */
-export async function reportMovedProduct(page: Page) {
-  // beforeEach signed into the real backend. Log that session out before
-  // replacing the store; merely removing its token would leak a session row.
+/** Log out the real backend session beforeEach created, without leaking its row. */
+async function dropRealStaffSession(page: Page) {
   const realToken = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
@@ -270,6 +268,13 @@ export async function reportMovedProduct(page: Page) {
   }
   // Start as a shopper with no staff session in storage.
   await page.evaluate((key) => localStorage.removeItem(key), STAFF_AUTH_STORAGE_KEY);
+}
+
+/** Shared on desktop and iPhone-sized browser viewports. */
+export async function reportMovedProduct(page: Page) {
+  // beforeEach signed into the real backend. Log that session out before
+  // replacing the store; merely removing its token would leak a session row.
+  await dropRealStaffSession(page);
   const store = await fakeStore(page);
   await page.goto('/');
   await page.reload(); // load products from the stand-in store
@@ -364,4 +369,56 @@ export async function reportMovedProduct(page: Page) {
   await page.reload();
   await expect(banner.getByText('Turn into aisle 3, left side, top shelf', { exact: true })).toBeVisible();
   await expect(bar.getByText('Aisle 3, left, top shelf', { exact: true })).toBeVisible();
+}
+
+/**
+ * A product found through search (no shopping list): reporting a new shelf
+ * must refresh the route once for the reported spot and then show it. A
+ * pending report used to hand the route effect a fresh product object on
+ * every render, so it cancelled and refetched forever ("Updating your
+ * route…" never finished and hundreds of /walk/route calls went out).
+ */
+export async function reportSearchedProduct(page: Page) {
+  await dropRealStaffSession(page);
+  const store = await fakeStore(page);
+  let routeCalls = 0;
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === '/walk/route' && request.method() === 'POST') routeCalls += 1;
+  });
+  await page.goto('/');
+  await page.reload(); // load products from the stand-in store
+  const banner = page.getByLabel('Route banner', { exact: true });
+  const bar = page.getByLabel('Route progress bar', { exact: true });
+
+  await page.getByRole('textbox', { name: 'Search store products', exact: true }).fill('milk');
+  await page.getByRole('button', { name: 'Select product Whole Milk 1L, Aisle 7, left, middle shelf', exact: true }).click();
+  await expect(banner.getByText('Turn into aisle 7, left side, middle shelf', { exact: true })).toBeVisible();
+  await expect(page.getByText('Updating your route…', { exact: true })).toBeHidden();
+  const callsBeforeReport = routeCalls;
+  expect(callsBeforeReport).toBeGreaterThan(0);
+
+  // Report it in aisle 2, left side, top shelf.
+  await page.getByRole('button', { name: 'Not here', exact: true }).click();
+  await expect(banner.getByText('Whole Milk 1L is not here', { exact: true })).toBeVisible();
+  await tapStorePoint(page, { x: aisleCenterX(2), y: 150 });
+  await expect(banner.getByText('Aisle 2', { exact: true })).toBeVisible();
+  await page.getByRole('radio', { name: 'Left side', exact: true }).click();
+  await page.getByRole('radio', { name: 'Top shelf', exact: true }).click();
+  await page.getByRole('button', { name: 'Send location report', exact: true }).click();
+
+  // The route goes to the reported shelf and settles there.
+  await expect(banner.getByText('Turn into aisle 2, left side, top shelf', { exact: true })).toBeVisible();
+  await expect(bar.getByText('Aisle 2, left, top shelf', { exact: true })).toBeVisible();
+  await expect(bar.getByText('Where you saw it · staff will check', { exact: true })).toBeVisible();
+  await expect(bar.getByText(/^\d+(\.\d+)? m from entrance$/)).toBeVisible();
+  await expect(page.getByText('Updating your route…', { exact: true })).toBeHidden();
+  expect(store.reports).toHaveLength(1);
+
+  // One refresh for the new spot, then quiet: no request flood, and the
+  // card keeps showing the route instead of spinning.
+  await page.waitForTimeout(2_500);
+  expect(routeCalls - callsBeforeReport).toBeLessThanOrEqual(2);
+  await expect(banner.getByText('Turn into aisle 2, left side, top shelf', { exact: true })).toBeVisible();
+  await expect(page.getByText('Updating your route…', { exact: true })).toBeHidden();
 }

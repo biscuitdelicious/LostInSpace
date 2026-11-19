@@ -63,6 +63,18 @@ export function dropReports(reports: Record<number, ShopperReport>, reportIds: n
   return next;
 }
 
+/**
+ * Keep the previous object when a refresh produced the same product data.
+ * Route planning reacts to this object's identity, so handing back a fresh
+ * object for unchanged data would replan the route over and over.
+ */
+export function keepStableProduct(
+  previous: StoreProduct | null,
+  next: StoreProduct | null,
+): StoreProduct | null {
+  return previous && next && sameProduct(previous, next) ? previous : next;
+}
+
 /** Latest store location, with this shopper's undecided report on top. */
 export function productForShopper(
   product: StoreProduct,

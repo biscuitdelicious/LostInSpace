@@ -6,7 +6,7 @@ import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as S
 import { getBand, getChannel, initialDemoNetworks, signalQuality, WifiNetwork } from './src/wifi';
 import { FALLBACK_PRODUCTS, PRODUCT_SEARCH_DEBOUNCE_MS, fetchProducts, StoreProduct } from './src/products';
 import { ENTRANCE_POINT, MapPoint, ProductRoute, formatDistance, routeInstruction, routeTurnDirection } from './src/route';
-import { EMPTY_SHOPPING_STATE, productForShopper, remainingTripDistance, shoppingReducer, type ShoppingRouteStatus, type ShoppingStop } from './src/shopping-list';
+import { EMPTY_SHOPPING_STATE, keepStableProduct, productForShopper, remainingTripDistance, shoppingReducer, type ShoppingRouteStatus, type ShoppingStop } from './src/shopping-list';
 import { callWalkApi, fetchWalkGraph, findWalkEdgeAtPoint, requestWalkRoute, resolveWalkEdges, toProductRoute, type WalkEdge, type WalkGraph } from './src/walk-graph';
 import { isShopperPositionFresh, loadShopperPosition, loadShopperPositionAsync, loadShoppingState, loadShoppingStateAsync, saveShoppingState, saveShoppingStateAsync } from './src/shopping-storage';
 import { insideStoreWalls, tappedWalkwayPosition } from './src/shopper-location';
@@ -889,8 +889,17 @@ function LisApp() {
   const trip = shopping.trip;
   const nextStop = trip?.stops[trip.currentIndex];
   // A single searched product also follows the store's latest shelf and
-  // this shopper's own undecided report.
-  const selectedForShopper = selectedProduct ? productForShopper(selectedProduct, catalogue, shopping.reports) : null;
+  // this shopper's own undecided report. The merged product must keep its
+  // identity while the data is unchanged: the route effect below depends on
+  // it, and a fresh object every render (as a pending report produced) made
+  // it cancel and refetch the route forever, stuck on "Updating your route…".
+  const selectedShopperRef = useRef<StoreProduct | null>(null);
+  const selectedForShopper = useMemo(() => {
+    const merged = selectedProduct ? productForShopper(selectedProduct, catalogue, shopping.reports) : null;
+    const stable = keepStableProduct(selectedShopperRef.current, merged);
+    selectedShopperRef.current = stable;
+    return stable;
+  }, [selectedProduct, catalogue, shopping.reports]);
   const currentProduct = nextStop?.product ?? selectedForShopper;
   const selectedPlanMatches = !!selectedForShopper && selectedWalkPlan?.productId === selectedForShopper.id;
   const selectedRoute = nextStop?.route ?? (selectedPlanMatches ? selectedWalkPlan.route : null);
