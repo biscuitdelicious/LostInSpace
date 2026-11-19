@@ -18,3 +18,13 @@ backend/.env.*
 
 # local service logs
 .run/
+
+# signing keys and certificates (kept from the August starter)
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+*.tsbuildinfo
+.metro-health-check*
