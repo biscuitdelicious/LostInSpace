@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
+import { UnsafeConfigurationError } from '../config/safe-env';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { DeviceTrust } from './device-trust';
@@ -37,6 +38,9 @@ describe('Staff authentication', () => {
   const fork = {
     count: jest.fn((entity: unknown) =>
       Promise.resolve(entity === StaffUser ? users.length : sessions.length),
+    ),
+    find: jest.fn((entity: unknown) =>
+      Promise.resolve(entity === StaffUser ? [...users] : [...sessions]),
     ),
     findOne: jest.fn((entity: unknown, where: Record<string, unknown>) => {
       if (entity === StaffUser) {
@@ -75,13 +79,19 @@ describe('Staff authentication', () => {
     nativeDelete: jest.fn(
       (
         entity: unknown,
-        where: { tokenHash?: string; expiresAt?: { $lt: Date } },
+        where: {
+          tokenHash?: string;
+          expiresAt?: { $lt: Date };
+          user?: StaffUser;
+        },
       ) => {
         if (entity !== StaffSession) return Promise.resolve(0);
         const before = sessions.length;
         for (let i = sessions.length - 1; i >= 0; i -= 1) {
           const session = sessions[i];
           if (where.tokenHash && session.tokenHash === where.tokenHash)
+            sessions.splice(i, 1);
+          else if (where.user && session.user === where.user)
             sessions.splice(i, 1);
           else if (
             where.expiresAt &&
@@ -195,6 +205,86 @@ describe('Staff authentication', () => {
     expect(users).toHaveLength(2);
     expect(users[0].username).toBe('manager');
     expect(users[1].username).toBe('other');
+  });
+
+  it('never turns a sample password into a staff account, and disables accounts that still have one', async () => {
+    // Copying .env.example unchanged used to create staff / <sample>.
+    for (const sample of [
+      'replace-with-staff-password',
+      'replace-with-something-else',
+      'change-me',
+      'password',
+      'Staff',
+    ]) {
+      envVars = { STAFF_USERNAME: 'staff', STAFF_PASSWORD: sample };
+      await expect(authService.onModuleInit()).rejects.toBeInstanceOf(
+        UnsafeConfigurationError,
+      );
+    }
+    expect(users).toHaveLength(0);
+
+    // A database that was started that way earlier still holds the account,
+    // plus whatever session someone opened with the public password.
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    const samplePassword = 'replace-with-staff-password';
+    const leftover = fork.create(StaffUser, {
+      username: 'staff',
+      passwordHash: await hashPassword(samplePassword),
+      createdAt: new Date(),
+    }) as StaffUser;
+    const careful = fork.create(StaffUser, {
+      username: 'careful',
+      passwordHash: await hashPassword('a-real-password-93'),
+      createdAt: new Date(),
+    }) as StaffUser;
+    for (const user of [leftover, careful]) {
+      fork.create(StaffSession, {
+        user,
+        tokenHash: hashToken(`session-of-${user.username}`),
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+    }
+
+    // The new .env names a different account: the old one must not stay open.
+    envVars = { STAFF_USERNAME: 'manager', STAFF_PASSWORD: 'new-real-secret' };
+    await authService.onModuleInit();
+    expect(await verifyPassword(samplePassword, leftover.passwordHash)).toBe(
+      false,
+    );
+    await expect(
+      authController.login({ username: 'staff', password: samplePassword }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(sessions.map((session) => session.user.username)).toEqual([
+      'careful',
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"staff"'));
+    // Accounts with real passwords are left exactly as they were.
+    expect(
+      await verifyPassword('a-real-password-93', careful.passwordHash),
+    ).toBe(true);
+    expect(
+      (
+        await authController.login({
+          username: 'manager',
+          password: 'new-real-secret',
+        })
+      ).user.username,
+    ).toBe('manager');
+
+    // Naming the disabled account in .env with a real password restores it.
+    envVars = { STAFF_USERNAME: 'staff', STAFF_PASSWORD: 'staff-real-secret' };
+    await authService.onModuleInit();
+    expect(
+      (
+        await authController.login({
+          username: 'staff',
+          password: 'staff-real-secret',
+        })
+      ).user.username,
+    ).toBe('staff');
   });
 
   it('issues hashed session tokens on login, validates them via StaffAuthGuard, and revokes them on logout', async () => {

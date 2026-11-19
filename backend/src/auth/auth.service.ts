@@ -9,6 +9,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  EXAMPLE_FILE_STAFF_PASSWORDS,
+  UnsafeConfigurationError,
+  staffPasswordProblem,
+} from '../config/safe-env';
 import { DeviceTrust } from './device-trust';
 import { LoginThrottle, loginThrottleKey } from './login-throttle';
 import { hashPassword, hashToken, verifyPassword } from './password';
@@ -42,9 +47,22 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // A sample password from an example file must never become a real
+    // sign-in. main.ts already refuses to start; this covers every other
+    // way the module can be booted.
+    const problem = staffPasswordProblem({
+      STAFF_USERNAME: this.config.get<string>('STAFF_USERNAME'),
+      STAFF_PASSWORD: this.config.get<string>('STAFF_PASSWORD'),
+    });
+    if (problem) throw new UnsafeConfigurationError([problem]);
+
     const password = this.config.get<string>('STAFF_PASSWORD') ?? '';
+    const rawUsername = this.config.get<string>('STAFF_USERNAME') ?? 'staff';
+    const username = rawUsername.trim() || 'staff';
+    const fork = this.em.fork();
+    await this.disableSamplePasswordAccounts(fork);
+
     if (!password.trim()) {
-      const fork = this.em.fork();
       const existingCount = await fork.count(StaffUser);
       if (existingCount === 0) {
         this.logger.warn(
@@ -54,9 +72,6 @@ export class AuthService implements OnModuleInit {
       return;
     }
 
-    const rawUsername = this.config.get<string>('STAFF_USERNAME') ?? 'staff';
-    const username = rawUsername.trim() || 'staff';
-    const fork = this.em.fork();
     const existing = await fork.findOne(StaffUser, { username });
     if (!existing) {
       fork.create(StaffUser, {
@@ -71,6 +86,36 @@ export class AuthService implements OnModuleInit {
     if (!matches) {
       existing.passwordHash = await hashPassword(password);
       await fork.flush();
+    }
+  }
+
+  /**
+   * An earlier start with an unedited example file may have created a staff
+   * account whose password is public. Sign such accounts out everywhere and
+   * replace the password with a random one nobody knows. The account named
+   * by STAFF_USERNAME then gets the configured password just below; any
+   * other one stays unusable until it is given a real password that way.
+   */
+  private async disableSamplePasswordAccounts(
+    fork: EntityManager,
+  ): Promise<void> {
+    const accounts = await fork.find(StaffUser, {});
+    for (const account of accounts) {
+      let usesSample = false;
+      for (const sample of EXAMPLE_FILE_STAFF_PASSWORDS) {
+        if (await verifyPassword(sample, account.passwordHash)) {
+          usesSample = true;
+        }
+      }
+      if (!usesSample) continue;
+      account.passwordHash = await hashPassword(
+        randomBytes(32).toString('hex'),
+      );
+      await fork.flush();
+      await fork.nativeDelete(StaffSession, { user: account });
+      this.logger.warn(
+        `Staff account "${account.username}" still had the sample password from .env.example. Its password was disabled and its sessions were signed out.`,
+      );
     }
   }
 

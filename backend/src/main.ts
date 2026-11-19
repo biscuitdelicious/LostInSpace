@@ -1,3 +1,6 @@
+// Keep this import first: it refuses to start on sample or missing secrets
+// before any other module reads the configuration.
+import './config/refuse-unsafe-env';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';

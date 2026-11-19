@@ -31,6 +31,64 @@
 $ npm install
 ```
 
+## Secrets and database access
+
+```bash
+$ cp .env.example .env      # then fill in the empty values
+$ openssl rand -hex 24      # one way to make a password
+$ docker compose up -d      # starts PostgreSQL
+```
+
+- **Nothing ships with a working password.** `.env.example` leaves
+  `DB_PASSWORD`, `STAFF_PASSWORD` and `STAFF_DEVICE_SECRET` empty, and there
+  is no built-in fallback such as `postgres`.
+- **The backend refuses to start** (and so do the migration commands) when
+  `DB_PASSWORD` is missing, or when `DB_PASSWORD`, `STAFF_PASSWORD` or
+  `STAFF_DEVICE_SECRET` is a sample or default value: `postgres`,
+  `password`, `replace-with-…`, `change-me`, the same text as the user name,
+  and the like. It prints which setting to fix. `docker compose` also stops
+  until `DB_PASSWORD` is set.
+- **`STAFF_PASSWORD` may stay empty**: then no staff account is created and
+  the staff pages cannot be signed in to.
+- **PostgreSQL is only reachable from this machine.** `docker-compose.yml`
+  publishes the port on `127.0.0.1`, so other devices on the same Wi-Fi or
+  network cannot connect to it. Check with `docker port lis-postgres`: it
+  must print `127.0.0.1:5432`, not `0.0.0.0:5432`.
+- If an earlier start used the old sample staff password, that account is
+  public knowledge. At startup the backend signs it out everywhere and
+  disables its password; the account named by `STAFF_USERNAME` then gets
+  the password from `.env`.
+
+### Changing the database password (keeping the data)
+
+PostgreSQL only reads `POSTGRES_PASSWORD` when it creates an empty data
+volume. For a database that already exists, change the password inside it;
+the store data stays in the `lis_pgdata` volume throughout.
+
+```bash
+# 0. Optional safety copy of the store data.
+$ docker exec lis-postgres pg_dump -U postgres -d lis -Fc > lis-backup.dump
+
+# 1. Make a new password and put it in .env as DB_PASSWORD=...
+#    (also set DB_HOST=127.0.0.1)
+$ openssl rand -hex 24
+
+# 2. Recreate the container so it listens on 127.0.0.1 only.
+#    The data volume is kept. The database still has the old password.
+$ docker compose up -d
+
+# 3. Set the new password inside the database: paste it twice when asked.
+$ docker exec -it lis-postgres psql -U postgres -c '\password postgres'
+
+# 4. Check: loopback only, and the data is still there.
+$ docker port lis-postgres
+$ docker exec lis-postgres psql -U postgres -d lis -c 'select count(*) from product'
+```
+
+Replace `postgres` and `lis` with your `DB_USER` and `DB_NAME` if you
+changed them. Never run `docker compose down -v` or `docker volume rm`:
+those delete the data volume.
+
 ## Database migrations
 
 The schema is owned by versioned MikroORM migrations in `src/migrations` —

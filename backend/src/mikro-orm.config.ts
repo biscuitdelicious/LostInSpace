@@ -1,22 +1,14 @@
-import path from 'node:path';
-import dotenv from 'dotenv';
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig } from '@mikro-orm/postgresql';
 import { StaffSession } from './auth/staff-session.entity';
 import { StaffUser } from './auth/staff-user.entity';
+import { databasePassword, loadEnvFiles } from './config/safe-env';
 import { Product } from './products/product.entity';
 import { ProductReport } from './reports/product-report.entity';
 import { WalkEdge } from './walk/walk-edge.entity';
 import { WalkNode } from './walk/walk-node.entity';
 
-dotenv.config({
-  path: [
-    '.env',
-    '../.env',
-    path.resolve(__dirname, '../.env'),
-    path.resolve(__dirname, '../../.env'),
-  ],
-});
+loadEnvFiles();
 
 export default defineConfig({
   entities: [
@@ -27,10 +19,13 @@ export default defineConfig({
     WalkNode,
     WalkEdge,
   ],
-  host: process.env.DB_HOST ?? 'localhost',
+  host: process.env.DB_HOST ?? '127.0.0.1',
   port: Number(process.env.DB_PORT ?? 5432),
   user: process.env.DB_USER ?? 'postgres',
-  password: process.env.DB_PASSWORD ?? 'postgres',
+  // No default password: a missing or sample DB_PASSWORD stops the app,
+  // the migration CLI and the tests alike, instead of quietly trying
+  // "postgres".
+  password: databasePassword(process.env),
   dbName: process.env.DB_NAME ?? 'lis',
   extensions: [Migrator],
   // Schema changes only ever happen through the versioned files in

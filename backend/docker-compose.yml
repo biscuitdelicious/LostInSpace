@@ -5,10 +5,16 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      # No default: compose stops here until backend/.env sets DB_PASSWORD.
+      # Postgres only reads this when it first creates an empty data volume;
+      # for an existing database see "Changing the database password" in
+      # README.md.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in backend/.env first (see .env.example)}
       POSTGRES_DB: ${DB_NAME:-lis}
     ports:
-      - '5432:5432'
+      # 127.0.0.1 only: the backend on this machine can connect, other
+      # devices on the same Wi-Fi or network cannot.
+      - '127.0.0.1:${DB_PORT:-5432}:5432'
     volumes:
       - lis_pgdata:/var/lib/postgresql/data
 
