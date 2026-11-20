@@ -8,6 +8,7 @@
     "web": "expo start --web",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "ios:xcode": "expo prebuild --platform ios && open ios/LISIndoorIntelligence.xcworkspace",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --import tsx --test src/*.test.ts",

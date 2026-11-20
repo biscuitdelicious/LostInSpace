@@ -6,12 +6,16 @@
     "orientation": "default",
     "userInterfaceStyle": "light",
     "scheme": "lis",
-    "ios": { "bundleIdentifier": "app.lis.indoor" },
+    "ios": {
+      "bundleIdentifier": "app.lis.indoor",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "LIS connects to the store server on this Wi-Fi network to load products, routes and reports."
+      }
+    },
     "android": {
       "package": "app.lis.indoor",
       "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_WIFI_STATE", "CHANGE_WIFI_STATE"]
     },
-    "web": { "bundler": "metro", "name": "LIS · Wi-Fi Scanner" },
-    "plugins": ["react-native-wifi-reborn"]
+    "web": { "bundler": "metro", "name": "LIS · Wi-Fi Scanner" }
   }
 }
