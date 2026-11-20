@@ -125,6 +125,47 @@ describe('WalkService route API', () => {
     expect(result.totalMeters).toBe(0);
   });
 
+  it('a shopper at the junction below a closed aisle entrance gets the open detour, or no route when none is left', async () => {
+    const { service, edges, ids } = makeService();
+    const close = (fromKey: string, toKey: string) => {
+      for (const edge of edges) {
+        const pair = new Set([edge.fromId, edge.toId]);
+        if (pair.has(ids.get(fromKey)!) && pair.has(ids.get(toKey)!))
+          edge.blocked = true;
+      }
+    };
+    close('c79', 'a1_215');
+    const junctionStart = { x: 79, y: 240 };
+
+    const detoured = await service.planRoute({
+      start: junctionStart,
+      products: [bread],
+    });
+    const route = detoured.stops[0].route;
+    expect(route).not.toBeNull();
+    expect(route!.meters).toBeGreaterThan(2.5);
+    // No leg of the reply walks the closed strip x=79 between y=215..240.
+    const walksClosedStrip = route!.points.some((point, index) => {
+      if (index === 0) return false;
+      const previous = route!.points[index - 1];
+      if (Math.abs(previous.x - 79) > 0.01 || Math.abs(point.x - 79) > 0.01)
+        return false;
+      const lo = Math.max(Math.min(previous.y, point.y), 215);
+      const hi = Math.min(Math.max(previous.y, point.y), 240);
+      return hi - lo > 0.01 && lo < 239.99 && hi > 215.01;
+    });
+    expect(walksClosedStrip).toBe(false);
+
+    // Seal aisle 1's only other entrance: the reply says unavailable.
+    close('a1_55', 'a2_55');
+    const sealed = await service.planRoute({
+      start: junctionStart,
+      products: [bread],
+    });
+    expect(sealed.stops).toEqual([{ productId: 3, route: null }]);
+    expect(sealed.totalMeters).toBe(0);
+  });
+
   it('validates shopper input without touching the graph', async () => {
     const { service } = makeService();
     await expect(

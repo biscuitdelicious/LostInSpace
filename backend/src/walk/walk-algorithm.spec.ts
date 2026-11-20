@@ -188,6 +188,123 @@ describe('walk graph algorithm', () => {
     expect(crossesStrip).toBe(false);
   });
 
+  /**
+   * True when the axis-parallel segment p→q walks along or across the
+   * inside of the closed axis-parallel section a→b (touching only at an
+   * endpoint of a→b does not count).
+   */
+  function sharesClosedInterior(
+    p: { x: number; y: number },
+    q: { x: number; y: number },
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+  ): boolean {
+    const EPS = 0.02;
+    const vertical = (u: typeof p, v: typeof p) => Math.abs(u.x - v.x) < EPS;
+    const horizontal = (u: typeof p, v: typeof p) => Math.abs(u.y - v.y) < EPS;
+    const overlap = (
+      lo1: number,
+      hi1: number,
+      lo2: number,
+      hi2: number,
+    ): boolean => {
+      const lo = Math.max(Math.min(lo1, hi1), Math.min(lo2, hi2));
+      const hi = Math.min(Math.max(lo1, hi1), Math.max(lo2, hi2));
+      return (
+        hi - lo > EPS &&
+        lo < Math.max(lo2, hi2) - EPS &&
+        hi > Math.min(lo2, hi2) + EPS
+      );
+    };
+    const between = (v: number, lo: number, hi: number, strict: boolean) =>
+      strict
+        ? v > Math.min(lo, hi) + EPS && v < Math.max(lo, hi) - EPS
+        : v >= Math.min(lo, hi) - EPS && v <= Math.max(lo, hi) + EPS;
+    if (vertical(p, q) && vertical(a, b) && Math.abs(p.x - a.x) < EPS) {
+      return overlap(p.y, q.y, a.y, b.y);
+    }
+    if (horizontal(p, q) && horizontal(a, b) && Math.abs(p.y - a.y) < EPS) {
+      return overlap(p.x, q.x, a.x, b.x);
+    }
+    if (vertical(p, q) && horizontal(a, b)) {
+      return between(p.x, a.x, b.x, true) && between(a.y, p.y, q.y, false);
+    }
+    if (horizontal(p, q) && vertical(a, b)) {
+      return between(p.y, a.y, b.y, true) && between(a.x, p.x, q.x, false);
+    }
+    return false;
+  }
+
+  it('never steps onto or off the graph through a closed section, even from its own junction', () => {
+    // The walkway between the corridor junction below aisle 1 and the
+    // aisle entrance is closed (c79 -> a1_215).
+    const closesEntrance = (fromKey: string, toKey: string) =>
+      [fromKey, toKey].includes('c79') && [fromKey, toKey].includes('a1_215');
+    const closed = withBlockedEdge(closesEntrance);
+    const junction = { x: AISLE_CENTER_X[0], y: CORRIDOR_Y };
+    const aisleMouth = { x: AISLE_CENTER_X[0], y: 215 };
+    const pin = { x: AISLE_CENTER_X[0] - 14, y: 88 };
+    const crossesClosure = (route: { points: { x: number; y: number }[] }) =>
+      route.points.some(
+        (point, index) =>
+          index > 0 &&
+          sharesClosedInterior(
+            route.points[index - 1],
+            point,
+            junction,
+            aisleMouth,
+          ),
+      );
+
+    // A shopper standing right at the junction used to get a straight
+    // 2.5 m "step onto the graph" through the closed walkway. Now the
+    // route detours via the next aisle and the back walkway.
+    const steppedOn = shortestWalk(closed.nodes, closed.edges, junction, pin);
+    expect(steppedOn).not.toBeNull();
+    expect(crossesClosure(steppedOn!)).toBe(false);
+    expect(steppedOn!.points.some((point) => point.y === 55)).toBe(true);
+    expect(steppedOn!.meters).toBeGreaterThan(2.5);
+
+    // Stepping off at the junction follows the same rule.
+    const steppedOff = shortestWalk(closed.nodes, closed.edges, pin, junction);
+    expect(steppedOff).not.toBeNull();
+    expect(crossesClosure(steppedOff!)).toBe(false);
+
+    // The far end of the closure too: standing at the aisle mouth, the
+    // walk to the entrance goes around, not down the closed strip.
+    const fromMouth = shortestWalk(
+      closed.nodes,
+      closed.edges,
+      aisleMouth,
+      ENTRANCE_NODE,
+    );
+    expect(fromMouth).not.toBeNull();
+    expect(crossesClosure(fromMouth!)).toBe(false);
+
+    // Walking the corridor THROUGH the junction is still legal: the
+    // closure is only met at its endpoint, never crossed.
+    const alongCorridor = shortestWalk(
+      closed.nodes,
+      closed.edges,
+      { x: AISLE_CENTER_X[1], y: CORRIDOR_Y },
+      junction,
+    );
+    expect(alongCorridor?.meters).toBe(7.7);
+
+    // With aisle 1's back-walkway link closed as well there is no open
+    // detour left, so the route is unavailable rather than closed-strip.
+    const sealed = withBlockedEdge(
+      (fromKey, toKey) =>
+        closesEntrance(fromKey, toKey) ||
+        ([fromKey, toKey].includes('a1_55') &&
+          [fromKey, toKey].includes('a2_55')),
+    );
+    expect(shortestWalk(sealed.nodes, sealed.edges, junction, pin)).toBeNull();
+    expect(
+      shortestWalk(sealed.nodes, sealed.edges, ENTRANCE_NODE, pin),
+    ).toBeNull();
+  });
+
   it('treats a shelf in a single blocked aisle section as unreachable', () => {
     const { nodeRows, edgeRows, byKey } = seededGraph();
     const closed = edgeRows.map((edge) =>

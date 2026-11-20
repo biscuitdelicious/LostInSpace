@@ -1,12 +1,14 @@
 /**
  * Shortest walks over the store's path graph (Dijkstra).
  *
- * Endpoints (a shelf pin, the entrance) are not graph nodes: each one
- * steps onto the graph at its nearest walkable point — the aisle centre
- * line at the pin's height, or a node it sits on — as long as that step
- * is a short, axis-parallel last mile. A blocked connection is simply
- * missing from the graph, so the search flows around it, and an endpoint
- * whose own aisle is closed has no legal step-on and reports no path.
+ * Endpoints (a shelf pin, the entrance, a tapped shopper spot) are not
+ * graph nodes: each one steps onto the graph at its nearest walkable
+ * point — the aisle centre line at the pin's height, or a node it sits
+ * on — as long as that step is a short, axis-parallel last mile that
+ * never walks along or across a closed section. A blocked connection is
+ * simply missing from the graph, so the search flows around it, and an
+ * endpoint whose own aisle is closed has no legal step-on and reports no
+ * path.
  *
  * The whole module is pure: the database only supplies nodes and edges.
  */
@@ -112,9 +114,66 @@ type Candidate = {
 };
 
 /**
+ * True when the last-mile step p→q walks along or across the inside of a
+ * closed section. Meeting a closed section exactly at one of its junction
+ * endpoints is allowed: that is standing at (or walking through) the
+ * junction, not crossing the closure. Without this check a shopper at the
+ * junction below a closed aisle entrance could "step onto" the node just
+ * past the closure — a straight walk through the closed walkway.
+ */
+function stepsThroughBlocked(
+  p: WalkPoint,
+  q: WalkPoint,
+  blockedEdges: OpenEdge[],
+): boolean {
+  const EPS = 0.01;
+  for (const { a, b } of blockedEdges) {
+    const sx = b.x - a.x;
+    const sy = b.y - a.y;
+    const lengthSquared = sx * sx + sy * sy;
+    if (lengthSquared < 1e-12) continue;
+    const slack = EPS / Math.sqrt(lengthSquared);
+    const rx = q.x - p.x;
+    const ry = q.y - p.y;
+    const stepLengthSquared = rx * rx + ry * ry;
+    const denom = rx * sy - ry * sx;
+    if (Math.abs(denom) > 1e-9) {
+      // Not parallel: at most one crossing point. t runs along the step,
+      // u along the closed section; only u strictly inside counts.
+      const t = ((a.x - p.x) * sy - (a.y - p.y) * sx) / denom;
+      const u = ((a.x - p.x) * ry - (a.y - p.y) * rx) / denom;
+      if (t >= -1e-9 && t <= 1 + 1e-9 && u > slack && u < 1 - slack) {
+        return true;
+      }
+      continue;
+    }
+    if (stepLengthSquared < 1e-12) {
+      // Zero-length step: only standing inside the closed section counts.
+      const u = ((p.x - a.x) * sx + (p.y - a.y) * sy) / lengthSquared;
+      if (u > slack && u < 1 - slack) {
+        const on = { x: a.x + u * sx, y: a.y + u * sy };
+        if (distance(p, on) < EPS) return true;
+      }
+      continue;
+    }
+    // Parallel: a shared stretch only counts when the segments are
+    // collinear and the overlap has real length inside the closed section.
+    const offLine = Math.abs((a.x - p.x) * ry - (a.y - p.y) * rx);
+    if (offLine > EPS * Math.sqrt(stepLengthSquared)) continue;
+    const t0 = ((p.x - a.x) * sx + (p.y - a.y) * sy) / lengthSquared;
+    const t1 = ((q.x - a.x) * sx + (q.y - a.y) * sy) / lengthSquared;
+    const lo = Math.max(0, Math.min(t0, t1));
+    const hi = Math.min(1, Math.max(t0, t1));
+    if (hi - lo > slack && lo < 1 - slack && hi > slack) return true;
+  }
+  return false;
+}
+
+/**
  * Every legal place an endpoint can step onto the graph: graph nodes and
- * projections onto open edges, kept only when the step is short and walks
- * axis-parallel (or starts exactly on the graph).
+ * projections onto open edges, kept only when the step is short, walks
+ * axis-parallel (or starts exactly on the graph), and stays off every
+ * closed section.
  */
 function attachCandidates(graph: Graph, point: WalkPoint): Candidate[] {
   // A pin belongs to the nearest physical walkway section. If that section
@@ -140,7 +199,8 @@ function attachCandidates(graph: Graph, point: WalkPoint): Candidate[] {
   const accept = (on: WalkPoint): boolean => {
     const d = distance(point, on);
     if (d > MAX_LAST_MILE_UNITS) return false;
-    return sharesAxis(point, on) || d < 0.5;
+    if (!sharesAxis(point, on) && d >= 0.5) return false;
+    return !stepsThroughBlocked(point, on, graph.blockedEdges);
   };
 
   for (const node of graph.nodes.values()) {

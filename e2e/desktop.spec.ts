@@ -623,7 +623,7 @@ async function setStaffHash(page: Page, hash: '#staff' | ''): Promise<void> {
 }
 
 test('walk edits replan open shopper routes and closed shelves never get a fallback path', async ({ page }) => {
-  test.setTimeout(90_000); // one assertion waits for the real 20-second path poll
+  test.setTimeout(150_000); // two assertions wait for the real 20-second path poll
   const initialResponse = await page.request.get(`${testApiUrl}/walk-graph`);
   expect(initialResponse.status()).toBe(200);
   const initial = (await initialResponse.json()) as WalkGraphPayload;
@@ -647,6 +647,8 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
   };
   const corridor = edgeBetween(nodeAt(345, 240), nodeAt(387, 240));
   const milkSection = edgeBetween(nodeAt(541, 151), nodeAt(541, 88));
+  const aisle1Entrance = edgeBetween(nodeAt(79, 240), nodeAt(79, 215));
+  const aisle1BackLink = edgeBetween(nodeAt(79, 55), nodeAt(156, 55));
   const addFrom = nodeAt(79, 55);
   const addTo = nodeAt(233, 55);
 
@@ -658,6 +660,8 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
   const restoreWalkPaths = async () => {
     await setBlocked(corridor.id, false);
     await setBlocked(milkSection.id, false);
+    await setBlocked(aisle1Entrance.id, false);
+    await setBlocked(aisle1BackLink.id, false);
     const current = (await (await page.request.get(`${testApiUrl}/walk-graph`)).json()) as WalkGraphPayload;
     const leftover = current.edges.find(edge =>
       (edge.fromNodeId === addFrom.id && edge.toNodeId === addTo.id)
@@ -746,6 +750,60 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await setStaffHash(page, '');
     await expect(bar.getByText('34.2 m from entrance', { exact: true })).toBeVisible();
     await expect(shopperMap.getByLabel(/^Closed walkway:/)).toHaveCount(0);
+
+    // The reported junction case: close the walkway between the corridor
+    // junction below aisle 1 and the aisle entrance. A shopper standing
+    // right at that junction must get the open detour, never a straight
+    // step up the closed strip; with the back detour sealed, no route.
+    const breadProducts = (await (await page.request.get(`${testApiUrl}/products?q=sourdough`)).json()) as { id: number; mapX: number; mapY: number }[];
+    expect(breadProducts.length).toBeGreaterThan(0);
+    const breadPin = breadProducts[0];
+    const routeFromJunction = async () => {
+      const response = await page.request.post(`${testApiUrl}/walk/route`, {
+        data: { start: { x: 79, y: 240 }, products: [{ id: breadPin.id, mapX: breadPin.mapX, mapY: breadPin.mapY }] },
+      });
+      const body = await response.json() as { stops: { route: { points: { x: number; y: number }[]; meters: number } | null }[] };
+      return body.stops[0].route;
+    };
+    const openLeg = await routeFromJunction();
+    expect(openLeg).not.toBeNull();
+    await setBlocked(aisle1Entrance.id, true);
+    const junctionLeg = await routeFromJunction();
+    expect(junctionLeg).not.toBeNull();
+    expect(junctionLeg!.meters).toBeGreaterThan(openLeg!.meters);
+    expect(junctionLeg!.points.some(point => point.y === 55)).toBe(true);
+    const walksClosedStrip = junctionLeg!.points.some((point, index) => {
+      if (index === 0) return false;
+      const previous = junctionLeg!.points[index - 1];
+      if (Math.abs(previous.x - 79) > 0.01 || Math.abs(point.x - 79) > 0.01) return false;
+      const lo = Math.max(Math.min(previous.y, point.y), 215);
+      const hi = Math.min(Math.max(previous.y, point.y), 240);
+      return hi - lo > 0.01 && lo < 239.99 && hi > 215.01;
+    });
+    expect(walksClosedStrip).toBe(false);
+
+    // In the shopper UI: tap the junction with the bread route open. The
+    // bar shows the detour distance, and the drawn path uses the back walkway.
+    await page.goto('/');
+    await page.getByRole('textbox', { name: 'Search store products', exact: true }).fill('sourdough');
+    await page.getByRole('button', { name: /^Select product Sourdough Bread/ }).click();
+    await tapShopperPoint(page, { x: 79, y: 240 });
+    const spotMeters = async () => {
+      const text = (await bar.textContent()) ?? '';
+      return Number.parseFloat(text.match(/([\d.]+) m from your spot/)?.[1] ?? 'NaN');
+    };
+    await expect.poll(async () => Math.abs((await spotMeters()) - junctionLeg!.meters)).toBeLessThanOrEqual(0.15);
+    await expect.poll(() => routePathData(page)).toMatch(/(^| )\d+ 55( |$)/);
+
+    // Seal aisle 1's only other entrance: the shopper is told it is closed.
+    await setBlocked(aisle1BackLink.id, true);
+    await expect(banner.getByText('Aisle 1 is closed right now', { exact: true })).toBeVisible({ timeout: 35_000 });
+    await expect(bar.getByText('Aisle 1 closed · no open walk to this shelf', { exact: true })).toBeVisible();
+    await expect.poll(() => routePathData(page)).toBe('');
+    await setBlocked(aisle1BackLink.id, false);
+    await setBlocked(aisle1Entrance.id, false);
+    // Reopened: the short walk through the aisle entrance is legal again.
+    await expect.poll(async () => Math.abs((await spotMeters()) - openLeg!.meters), { timeout: 35_000 }).toBeLessThanOrEqual(0.15);
 
     // Add, then verify Remove asks first and Keep leaves the graph untouched.
     await setStaffHash(page, '#staff');
