@@ -5,6 +5,7 @@ import { FALLBACK_PRODUCTS } from './products';
 import {
   aisleCenterX,
   formatDistance,
+  routeDetourNotice,
   routeInstruction,
   routeTurnDirection,
 } from './route';
@@ -44,4 +45,66 @@ test('routeTurnDirection points left for left shelves, right for right shelves, 
     routeTurnDirection({ aisleLocation: 'Aisle 4', aisleNumber: 4, mapX: aisleCenterX(4) + 14 }),
     'right',
   );
+});
+
+test('detour routes describe the real first turn and the closed section instead of the blocked aisle entrance', () => {
+  const bread = FALLBACK_PRODUCTS.find((p) => p.name === 'Sourdough Bread');
+  const bananas = FALLBACK_PRODUCTS.find((p) => p.name === 'Organic Bananas');
+  assert.ok(bread);
+  assert.ok(bananas);
+
+  const aisle2Detour = {
+    detour: {
+      closedSection: 'aisle 1 entrance',
+      firstAisle: 2,
+      via: 'back walkway' as const,
+      firstTurn: 'left' as const,
+    },
+  };
+  assert.equal(
+    routeInstruction(bread, aisle2Detour),
+    'Turn into aisle 2, via back walkway to aisle 1',
+  );
+  assert.equal(routeDetourNotice(aisle2Detour), 'Aisle 1 entrance closed');
+  assert.equal(routeTurnDirection(bread, aisle2Detour), 'left');
+
+  const straightDetour = {
+    detour: {
+      closedSection: 'aisle 1 entrance',
+      firstAisle: 2,
+      via: 'back walkway' as const,
+      firstTurn: 'straight' as const,
+    },
+  };
+  assert.equal(
+    routeInstruction(bread, straightDetour),
+    'Take aisle 2, via back walkway to aisle 1',
+  );
+  assert.equal(routeTurnDirection(bread, straightDetour), 'straight');
+
+  const backWalkwayDetour = {
+    detour: {
+      closedSection: 'aisle 1 entrance',
+      firstAisle: null,
+      via: 'back walkway' as const,
+      firstTurn: 'right' as const,
+    },
+  };
+  assert.equal(
+    routeInstruction(bananas, backWalkwayDetour),
+    'Take the back walkway to aisle 2',
+  );
+  assert.equal(routeTurnDirection(bananas, backWalkwayDetour), 'right');
+
+  const customDetour = {
+    detour: {
+      closedSection: 'front corridor',
+      firstAisle: 2,
+      via: null,
+      firstTurn: 'left' as const,
+    },
+  };
+  assert.equal(routeInstruction(bread, customDetour), 'Turn into aisle 2, then to aisle 1');
+  assert.equal(routeDetourNotice(customDetour), 'Front corridor closed');
+  assert.equal(routeDetourNotice(null), null);
 });

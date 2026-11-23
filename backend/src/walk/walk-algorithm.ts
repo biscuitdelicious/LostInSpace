@@ -13,7 +13,13 @@
  * The whole module is pure: the database only supplies nodes and edges.
  */
 
-import { METERS_PER_MAP_UNIT } from './store-layout';
+import {
+  CORRIDOR_Y,
+  METERS_PER_MAP_UNIT,
+  TOP_WALKWAY_Y,
+  aisleAt,
+  walkEdgeShopperLabel,
+} from './store-layout';
 
 /** Map scale used for every reported walking distance. */
 
@@ -35,7 +41,23 @@ export type WalkEdgeData = {
   blocked: boolean;
 };
 
-export type WalkRoute = { points: WalkPoint[]; meters: number };
+export type WalkRouteDetour = {
+  /** Plain shopper name of the closed section avoided, e.g. "aisle 1 entrance". */
+  closedSection: string;
+  /** First intermediate aisle the detoured path enters, or null when leaving the current aisle directly onto a walkway. */
+  firstAisle: number | null;
+  /** Connecting walkway taken around the closure, when applicable. */
+  via: 'back walkway' | 'front corridor' | null;
+  /** Direction of the first turn along the detour. */
+  firstTurn: 'left' | 'right' | 'straight';
+};
+
+export type WalkRoute = {
+  points: WalkPoint[];
+  meters: number;
+  /** Present when a closed walkway forced a longer route around it. */
+  detour?: WalkRouteDetour;
+};
 
 export type WalkTripPlan = {
   /** Stop indices in visiting order (a permutation of 1..stops.length). */
@@ -266,22 +288,187 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function metersOf(points: WalkPoint[]): number {
+function pathUnits(points: WalkPoint[]): number {
   let units = 0;
   for (let i = 1; i < points.length; i += 1) {
     units += distance(points[i - 1], points[i]);
   }
-  return Math.round(units * METERS_PER_MAP_UNIT * 10) / 10;
+  return units;
 }
 
-/** The shortest walk between two points, or null when none is walkable. */
-export function shortestWalk(
-  nodes: WalkNodeData[],
-  edges: WalkEdgeData[],
+function metersOf(points: WalkPoint[]): number {
+  return Math.round(pathUnits(points) * METERS_PER_MAP_UNIT * 10) / 10;
+}
+
+type Leg = { from: WalkPoint; to: WalkPoint };
+
+function nearCoord(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.05;
+}
+
+/** Merge consecutive collinear segments in the same direction into straight legs. */
+function simplifyLegs(points: WalkPoint[]): Leg[] {
+  const legs: Leg[] = [];
+  for (let i = 1; i < points.length; i += 1) {
+    const from = points[i - 1];
+    const to = points[i];
+    const len = distance(from, to);
+    if (len < 0.01) continue;
+    const prev = legs[legs.length - 1];
+    if (prev) {
+      const prevLen = distance(prev.from, prev.to);
+      const dot =
+        ((prev.to.x - prev.from.x) * (to.x - from.x) +
+          (prev.to.y - prev.from.y) * (to.y - from.y)) /
+        (prevLen * len);
+      if (dot > 0.999) {
+        prev.to = to;
+        continue;
+      }
+    }
+    legs.push({ from, to });
+  }
+  return legs;
+}
+
+/**
+ * Relative turn from leg `a` onto leg `b` in store map coordinates (+x right,
+ * +y down), matching the shopper's body turning left or right in the store.
+ */
+function turnDirection(a: Leg, b: Leg): 'left' | 'right' | 'straight' {
+  const dx1 = a.to.x - a.from.x;
+  const dy1 = a.to.y - a.from.y;
+  const dx2 = b.to.x - b.from.x;
+  const dy2 = b.to.y - b.from.y;
+  const cross = dx1 * dy2 - dy1 * dx2;
+  if (cross < -0.01) return 'left';
+  if (cross > 0.01) return 'right';
+  return 'straight';
+}
+
+function aisleOfVerticalLeg(leg: Leg): number | null {
+  if (!nearCoord(leg.from.x, leg.to.x)) return null;
+  if (Math.abs(leg.to.y - leg.from.y) < 1) return null;
+  const aisle = aisleAt(leg.from.x);
+  if (aisle === null) return null;
+  const lowY = Math.min(leg.from.y, leg.to.y);
+  const highY = Math.max(leg.from.y, leg.to.y);
+  if (lowY >= CORRIDOR_Y - 0.5 || highY <= TOP_WALKWAY_Y + 0.5) return null;
+  return aisle;
+}
+
+function aisleEnteredByLeg(leg: Leg): number | null {
+  const aisle = aisleOfVerticalLeg(leg);
+  if (aisle === null) return null;
+  if (
+    nearCoord(leg.from.y, CORRIDOR_Y) ||
+    nearCoord(leg.from.y, TOP_WALKWAY_Y)
+  ) {
+    return aisle;
+  }
+  return null;
+}
+
+function horizontalWalkwayOf(
+  leg: Leg,
+): 'back walkway' | 'front corridor' | null {
+  if (!nearCoord(leg.from.y, leg.to.y)) return null;
+  if (Math.abs(leg.to.x - leg.from.x) < 1) return null;
+  if (nearCoord(leg.from.y, TOP_WALKWAY_Y)) return 'back walkway';
+  if (nearCoord(leg.from.y, CORRIDOR_Y)) return 'front corridor';
+  return null;
+}
+
+/** First closed edge intersected by the unblocked shortest walk. */
+function findBlockedSection(
+  directPoints: WalkPoint[],
+  blockedEdges: OpenEdge[],
+): string {
+  for (let i = 1; i < directPoints.length; i += 1) {
+    const p = directPoints[i - 1];
+    const q = directPoints[i];
+    for (const edge of blockedEdges) {
+      if (stepsThroughBlocked(p, q, [edge])) {
+        return walkEdgeShopperLabel(
+          { mapX: edge.a.x, mapY: edge.a.y },
+          { mapX: edge.b.x, mapY: edge.b.y },
+        );
+      }
+    }
+  }
+  return 'walkway';
+}
+
+function buildDetourInfo(
+  actualPoints: WalkPoint[],
+  directPoints: WalkPoint[],
+  blockedEdges: OpenEdge[],
+): WalkRouteDetour {
+  const closedSection = findBlockedSection(directPoints, blockedEdges);
+  const legs = simplifyLegs(actualPoints);
+
+  let targetAisle: number | null = null;
+  for (let i = legs.length - 1; i >= 0; i -= 1) {
+    const aisle = aisleOfVerticalLeg(legs[i]);
+    if (aisle !== null) {
+      targetAisle = aisle;
+      break;
+    }
+  }
+
+  let firstEnteredIndex = -1;
+  let firstAisle: number | null = null;
+  for (let i = 0; i < legs.length; i += 1) {
+    const aisle = aisleEnteredByLeg(legs[i]);
+    if (aisle !== null && aisle !== targetAisle) {
+      firstEnteredIndex = i;
+      firstAisle = aisle;
+      break;
+    }
+  }
+
+  if (firstAisle !== null) {
+    const firstTurn =
+      firstEnteredIndex > 0
+        ? turnDirection(legs[firstEnteredIndex - 1], legs[firstEnteredIndex])
+        : 'straight';
+    let via: 'back walkway' | 'front corridor' | null = null;
+    for (let i = firstEnteredIndex + 1; i < legs.length; i += 1) {
+      const walkway = horizontalWalkwayOf(legs[i]);
+      if (walkway) {
+        via = walkway;
+        break;
+      }
+    }
+    return { closedSection, firstAisle, via, firstTurn };
+  }
+
+  let viaIndex = -1;
+  let via: 'back walkway' | 'front corridor' | null = null;
+  for (let i = 0; i < legs.length; i += 1) {
+    const walkway = horizontalWalkwayOf(legs[i]);
+    if (walkway && walkway !== closedSection) {
+      viaIndex = i;
+      via = walkway;
+      break;
+    }
+  }
+  const firstTurn =
+    viaIndex > 0
+      ? turnDirection(legs[viaIndex - 1], legs[viaIndex])
+      : viaIndex === 0
+        ? 'straight'
+        : legs.length >= 2
+          ? turnDirection(legs[0], legs[1])
+          : 'straight';
+  return { closedSection, firstAisle: null, via, firstTurn };
+}
+
+function findShortestWalk(
+  graph: Graph,
   from: WalkPoint,
   to: WalkPoint,
-): WalkRoute | null {
-  const graph = buildGraph(nodes, edges);
+): { points: WalkPoint[]; meters: number } | null {
   const sources = attachCandidates(graph, from);
   const targets = attachCandidates(graph, to);
   if (!sources.length || !targets.length) return null;
@@ -337,6 +524,36 @@ export function shortestWalk(
   };
 }
 
+/** The shortest walk between two points, or null when none is walkable. */
+export function shortestWalk(
+  nodes: WalkNodeData[],
+  edges: WalkEdgeData[],
+  from: WalkPoint,
+  to: WalkPoint,
+): WalkRoute | null {
+  const graph = buildGraph(nodes, edges);
+  const actual = findShortestWalk(graph, from, to);
+  if (!actual) return null;
+  if (graph.blockedEdges.length > 0) {
+    const openGraph = buildGraph(
+      nodes,
+      edges.map((edge) => ({ ...edge, blocked: false })),
+    );
+    const direct = findShortestWalk(openGraph, from, to);
+    if (direct && pathUnits(actual.points) > pathUnits(direct.points) + 0.01) {
+      return {
+        ...actual,
+        detour: buildDetourInfo(
+          actual.points,
+          direct.points,
+          graph.blockedEdges,
+        ),
+      };
+    }
+  }
+  return actual;
+}
+
 /**
  * Order a list of stops by real walking distance: nearest neighbour from
  * the start over all-pairs shortest walks, then a 2-opt pass when every
@@ -350,6 +567,7 @@ export function planWalkTrip(
   from: WalkPoint,
   stops: WalkPoint[],
 ): WalkTripPlan {
+  const graph = buildGraph(nodes, edges);
   const points = [from, ...stops];
   const size = points.length;
   const matrix: (number | null)[][] = Array.from({ length: size }, () =>
@@ -358,7 +576,7 @@ export function planWalkTrip(
   for (let i = 0; i < size; i += 1) {
     matrix[i][i] = 0;
     for (let j = i + 1; j < size; j += 1) {
-      const route = shortestWalk(nodes, edges, points[i], points[j]);
+      const route = findShortestWalk(graph, points[i], points[j]);
       const meters = route ? route.meters : null;
       matrix[i][j] = meters;
       matrix[j][i] = meters;

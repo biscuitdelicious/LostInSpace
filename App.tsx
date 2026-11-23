@@ -5,7 +5,7 @@ import { Activity, ArrowDown, ArrowDownToLine, ArrowRight, ArrowUp, ArrowUpLeft,
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { getBand, getChannel, initialDemoNetworks, signalQuality, WifiNetwork } from './src/wifi';
 import { FALLBACK_PRODUCTS, PRODUCT_SEARCH_DEBOUNCE_MS, fetchProducts, StoreProduct } from './src/products';
-import { ENTRANCE_POINT, MapPoint, ProductRoute, formatDistance, routeInstruction, routeTurnDirection } from './src/route';
+import { ENTRANCE_POINT, MapPoint, ProductRoute, formatDistance, routeDetourNotice, routeInstruction, routeTurnDirection } from './src/route';
 import { EMPTY_SHOPPING_STATE, keepStableProduct, productForShopper, remainingTripDistance, shoppingReducer, type ShoppingRouteStatus, type ShoppingStop } from './src/shopping-list';
 import { callWalkApi, fetchWalkGraph, findWalkEdgeAtPoint, requestWalkRoute, resolveWalkEdges, toProductRoute, type WalkEdge, type WalkGraph } from './src/walk-graph';
 import { isShopperPositionFresh, loadShopperPosition, loadShopperPositionAsync, loadShoppingState, loadShoppingStateAsync, saveShoppingState, saveShoppingStateAsync } from './src/shopping-storage';
@@ -1213,10 +1213,12 @@ function LisApp() {
       setNotice('Scan data exported.');
     } catch { setError('Could not export the scan. Please try again.'); }
   }
+  const readyRoute = currentRouteStatus === 'ready' ? selectedRoute : null;
+  const detourNotice = routeDetourNotice(readyRoute);
   const bannerDirection = reporting
     ? (reportSide ?? 'straight')
     : currentProduct
-      ? routeTurnDirection(currentProduct)
+      ? routeTurnDirection(currentProduct, readyRoute)
       : 'straight';
   const BannerTurnIcon = bannerDirection === 'left' ? ArrowUpLeft : bannerDirection === 'right' ? ArrowUpRight : ArrowUp;
   const bannerTurnLabel = bannerDirection === 'left' ? 'Turn left' : bannerDirection === 'right' ? 'Turn right' : 'Go straight';
@@ -1382,8 +1384,8 @@ function LisApp() {
               ) : (
                 <>
                   {trip && <Label style={s.routeBannerSub}>Stop {trip.currentIndex + 1} of {trip.stops.length} · {currentProduct.name}</Label>}
-                  <Label style={[s.routeInstruction, mobile && { fontSize: 18, lineHeight: 23 }]}>{currentRouteStatus === 'closed' ? `Aisle ${currentProduct.aisleNumber} is closed right now` : currentRouteStatus === 'pending' ? 'Finding the shortest walk…' : currentRouteStatus === 'unavailable' ? 'Route unavailable right now' : routeInstruction(currentProduct)}</Label>
-                  <Label style={s.routeBannerSub}>{currentRouteStatus === 'closed' ? `No open walkway reaches ${currentProduct.name}. Please check again shortly.` : currentRouteStatus === 'pending' ? currentProduct.name : currentRouteStatus === 'unavailable' ? 'Check your connection. Your route will update automatically.' : `${formatDistance(selectedRoute?.distanceMeters ?? 0)} to ${currentProduct.name}`}</Label>
+                  <Label style={[s.routeInstruction, mobile && { fontSize: 18, lineHeight: 23 }]}>{currentRouteStatus === 'closed' ? `Aisle ${currentProduct.aisleNumber} is closed right now` : currentRouteStatus === 'pending' ? 'Finding the shortest walk…' : currentRouteStatus === 'unavailable' ? 'Route unavailable right now' : routeInstruction(currentProduct, readyRoute)}</Label>
+                  <Label style={s.routeBannerSub}>{currentRouteStatus === 'closed' ? `No open walkway reaches ${currentProduct.name}. Please check again shortly.` : currentRouteStatus === 'pending' ? currentProduct.name : currentRouteStatus === 'unavailable' ? 'Check your connection. Your route will update automatically.' : detourNotice ? `${detourNotice} · ${formatDistance(selectedRoute?.distanceMeters ?? 0)} to ${currentProduct.name}` : `${formatDistance(selectedRoute?.distanceMeters ?? 0)} to ${currentProduct.name}`}</Label>
                 </>
               )}
             </View>

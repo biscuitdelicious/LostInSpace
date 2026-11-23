@@ -7,7 +7,7 @@
  */
 import type { StoreProduct } from './products';
 import { resolveApiBaseUrl } from './products';
-import type { MapPoint, ProductRoute } from './route';
+import type { MapPoint, ProductRoute, RouteDetour } from './route';
 import { StaffUnauthorizedError } from './staff-auth';
 
 export type WalkNode = { id: number; mapX: number; mapY: number; label: string };
@@ -104,9 +104,38 @@ export function findWalkEdgeAtPoint(
 
 export type WalkRouteStop = {
   productId: number;
-  route: { points: MapPoint[]; meters: number } | null;
+  route: { points: MapPoint[]; meters: number; detour?: RouteDetour } | null;
 };
 export type WalkRouteResponse = { stops: WalkRouteStop[]; totalMeters: number };
+
+function parseRouteDetour(value: unknown): RouteDetour | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.closedSection !== 'string' || !candidate.closedSection.trim()) {
+    return undefined;
+  }
+  const firstAisle = candidate.firstAisle;
+  if (
+    firstAisle !== null &&
+    (typeof firstAisle !== 'number' || !Number.isInteger(firstAisle) || firstAisle < 1)
+  ) {
+    return undefined;
+  }
+  const via = candidate.via;
+  if (via !== null && via !== 'back walkway' && via !== 'front corridor') {
+    return undefined;
+  }
+  const firstTurn = candidate.firstTurn;
+  if (firstTurn !== 'left' && firstTurn !== 'right' && firstTurn !== 'straight') {
+    return undefined;
+  }
+  return {
+    closedSection: candidate.closedSection,
+    firstAisle,
+    via,
+    firstTurn,
+  };
+}
 
 /** Loads the current graph for change detection and the staff editor. */
 export async function fetchWalkGraph(
@@ -163,17 +192,30 @@ export async function requestWalkRoute(
     ) {
       throw new Error('The store returned an invalid route.');
     }
-    return stop;
+    const detour = parseRouteDetour(stop.route.detour);
+    return {
+      productId: stop.productId,
+      route: {
+        points: stop.route.points,
+        meters: stop.route.meters,
+        ...(detour ? { detour } : {}),
+      },
+    };
   });
   return { stops, totalMeters: typeof data.totalMeters === 'number' ? data.totalMeters : 0 };
 }
 
 /** Convert backend route points into the polyline the floor plan draws. */
-export function toProductRoute(route: { points: MapPoint[]; meters: number }): ProductRoute {
+export function toProductRoute(route: {
+  points: MapPoint[];
+  meters: number;
+  detour?: RouteDetour;
+}): ProductRoute {
   return {
     points: route.points,
     path: route.points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' '),
     distanceMeters: route.meters,
+    ...(route.detour ? { detour: route.detour } : {}),
   };
 }
 

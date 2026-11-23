@@ -699,6 +699,9 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
       name: 'Corridor · entrance to aisle 5',
     });
     await expect(bar.getByText('57.8 m from entrance', { exact: true })).toBeVisible({ timeout: 35_000 });
+    await expect(banner.getByText('Turn into aisle 4, via back walkway to aisle 7', { exact: true })).toBeVisible();
+    await expect(banner.getByText('Front corridor closed · 57.8 m to Whole Milk 1L', { exact: true })).toBeVisible();
+    await expect(banner.getByLabel('Turn right', { exact: true })).toBeVisible();
     await expect.poll(() => routePathData(page)).toMatch(/(^| )\d+ 55( |$)/);
     const shopperMap = page.getByRole('img', { name: 'Store map', exact: true });
     await expect(shopperMap.getByLabel('Closed walkway: Corridor · entrance to aisle 5', { exact: true })).toBeVisible();
@@ -719,6 +722,7 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await expect(page.getByRole('button', { name: `Block connection ${corridor.id}`, exact: true })).toBeVisible();
     await setStaffHash(page, '');
     await expect(bar.getByText('34.2 m from entrance', { exact: true })).toBeVisible();
+    await expect(banner.getByText('Turn into aisle 7, left side, middle shelf', { exact: true })).toBeVisible();
     await expect(shopperMap.getByLabel(/^Closed walkway:/)).toHaveCount(0);
 
     // Close the exact section containing the milk by clicking it on the Walk paths map.
@@ -794,6 +798,10 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     };
     await expect.poll(async () => Math.abs((await spotMeters()) - junctionLeg!.meters)).toBeLessThanOrEqual(0.15);
     await expect.poll(() => routePathData(page)).toMatch(/(^| )\d+ 55( |$)/);
+    await expect(banner.getByText('Turn into aisle 2, via back walkway to aisle 1', { exact: true })).toBeVisible();
+    await expect(banner.getByText(/^Aisle 1 entrance closed · [\d.]+ m to Sourdough Bread$/)).toBeVisible();
+    await expect(banner.getByLabel('Turn left', { exact: true })).toBeVisible();
+    await expect(banner.getByText('Turn into aisle 1, right side, top shelf', { exact: true })).toBeHidden();
 
     // Seal aisle 1's only other entrance: the shopper is told it is closed.
     await setBlocked(aisle1BackLink.id, true);
@@ -804,6 +812,7 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await setBlocked(aisle1Entrance.id, false);
     // Reopened: the short walk through the aisle entrance is legal again.
     await expect.poll(async () => Math.abs((await spotMeters()) - openLeg!.meters), { timeout: 35_000 }).toBeLessThanOrEqual(0.15);
+    await expect(banner.getByText('Turn into aisle 1, right side, top shelf', { exact: true })).toBeVisible();
 
     // Add, then verify Remove asks first and Keep leaves the graph untouched.
     await setStaffHash(page, '#staff');

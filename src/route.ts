@@ -16,12 +16,25 @@ export function aisleCenterX(aisleNumber: number): number {
   return 79 + (aisleNumber - 1) * 77;
 }
 
+export type RouteDetour = {
+  /** Plain shopper name of the closed section avoided, e.g. "aisle 1 entrance". */
+  closedSection: string;
+  /** First intermediate aisle the detoured path enters, or null when leaving the current aisle directly onto a walkway. */
+  firstAisle: number | null;
+  /** Connecting walkway taken around the closure, when applicable. */
+  via: 'back walkway' | 'front corridor' | null;
+  /** Direction of the first turn along the detour. */
+  firstTurn: 'left' | 'right' | 'straight';
+};
+
 export type ProductRoute = {
   /** Ordered waypoints from `start` to the product pin, supplied by the backend. */
   points: MapPoint[];
   /** SVG path data (`M … L …`) for the waypoints. */
   path: string;
   distanceMeters: number;
+  /** Present when a closed walkway forced a longer route around it. */
+  detour?: RouteDetour;
 };
 
 export function formatDistance(distanceMeters: number): string {
@@ -29,11 +42,32 @@ export function formatDistance(distanceMeters: number): string {
 }
 
 /**
- * Turn-by-turn wording for the map banner, built from the aisle location
- * string, e.g. "Aisle 7, left, middle shelf" becomes
- * "Turn into aisle 7, left side, middle shelf".
+ * Turn-by-turn wording for the map banner.
+ *
+ * For an open direct route this reads the product's shelf location, e.g.
+ * "Turn into aisle 7, left side, middle shelf". When a closed walkway forces
+ * a detour, it names the first aisle or walkway the shopper actually takes
+ * instead of sending them towards the closed entrance.
  */
-export function routeInstruction(product: StoreProduct): string {
+export function routeInstruction(
+  product: StoreProduct,
+  route?: Pick<ProductRoute, 'detour'> | null,
+): string {
+  const detour = route?.detour;
+  if (detour) {
+    const target = `aisle ${product.aisleNumber}`;
+    if (detour.firstAisle !== null) {
+      const verb = detour.firstTurn === 'straight' ? 'Take' : 'Turn into';
+      return detour.via
+        ? `${verb} aisle ${detour.firstAisle}, via ${detour.via} to ${target}`
+        : `${verb} aisle ${detour.firstAisle}, then to ${target}`;
+    }
+    if (detour.via) {
+      return `Take the ${detour.via} to ${target}`;
+    }
+    return `Detour to ${target}`;
+  }
+
   const parts = product.aisleLocation
     .split(',')
     .map((part) => part.trim())
@@ -53,12 +87,24 @@ export function routeInstruction(product: StoreProduct): string {
     .join(', ');
 }
 
+/** Short banner reason when a route is a detour, e.g. "Aisle 1 entrance closed". */
+export function routeDetourNotice(
+  route?: Pick<ProductRoute, 'detour'> | null,
+): string | null {
+  const section = route?.detour?.closedSection?.trim();
+  if (!section) return null;
+  return `${section[0].toUpperCase()}${section.slice(1)} closed`;
+}
+
 /**
- * Which side of the aisle the banner turn icon should point towards.
+ * Which direction the banner turn icon should point towards: the real first
+ * turn on a detour, or the product's side of the aisle on a direct route.
  */
 export function routeTurnDirection(
   product: Pick<StoreProduct, 'aisleLocation' | 'aisleNumber' | 'mapX'>,
+  route?: Pick<ProductRoute, 'detour'> | null,
 ): 'left' | 'right' | 'straight' {
+  if (route?.detour) return route.detour.firstTurn;
   const parts = product.aisleLocation
     .split(',')
     .map((part) => part.trim())

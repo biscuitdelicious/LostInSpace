@@ -8,6 +8,7 @@ import {
 import {
   type WalkEdgeData,
   type WalkNodeData,
+  type WalkRoute,
   planWalkTrip,
   shortestWalk,
 } from './walk-algorithm';
@@ -39,7 +40,7 @@ export type WalkRouteRequest = {
 };
 export type WalkRouteStopView = {
   productId: number;
-  route: { points: { x: number; y: number }[]; meters: number } | null;
+  route: WalkRoute | null;
 };
 export type WalkRouteView = {
   stops: WalkRouteStopView[];

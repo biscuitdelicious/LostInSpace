@@ -32,9 +32,44 @@ function near(a: number, b: number): boolean {
   return Math.abs(a - b) < 0.01;
 }
 
-function aisleAt(x: number): number | null {
+export function aisleAt(x: number): number | null {
   const index = AISLE_CENTER_X.findIndex((centre) => near(centre, x));
   return index < 0 ? null : index + 1;
+}
+
+/**
+ * Plain shopper-facing name for a closed section in a detour notice, e.g.
+ * "aisle 1 entrance" or "front corridor".
+ */
+export function walkEdgeShopperLabel(
+  from: LayoutPoint,
+  to: LayoutPoint,
+): string {
+  const aisle = aisleAt(from.mapX);
+  if (aisle && aisle === aisleAt(to.mapX)) {
+    const lowY = Math.min(from.mapY, to.mapY);
+    const highY = Math.max(from.mapY, to.mapY);
+    if (near(highY, CORRIDOR_Y) && near(lowY, TOP_WALKWAY_Y)) {
+      return `aisle ${aisle}`;
+    }
+    if (near(highY, CORRIDOR_Y)) return `aisle ${aisle} entrance`;
+    if (near(lowY, TOP_WALKWAY_Y)) return `back of aisle ${aisle}`;
+    return `part of aisle ${aisle}`;
+  }
+  if (near(from.mapY, CORRIDOR_Y) && near(to.mapY, CORRIDOR_Y)) {
+    return 'front corridor';
+  }
+  if (near(from.mapY, TOP_WALKWAY_Y) && near(to.mapY, TOP_WALKWAY_Y)) {
+    return 'back walkway';
+  }
+  if (
+    near(from.mapX, ENTRANCE_NODE.x) &&
+    near(to.mapX, ENTRANCE_NODE.x) &&
+    (near(from.mapY, ENTRANCE_NODE.y) || near(to.mapY, ENTRANCE_NODE.y))
+  ) {
+    return 'main entrance';
+  }
+  return 'walkway';
 }
 
 /** A specific junction name, including its position within an aisle. */

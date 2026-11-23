@@ -79,12 +79,27 @@ test('requestWalkRoute rejects incomplete or failed responses', async () => {
   }
 });
 
-test('toProductRoute only converts backend points into SVG path data', () => {
+test('toProductRoute converts backend points into SVG path data and keeps detour details when present', () => {
   assert.deepEqual(toProductRoute({ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }], meters: 12.5 }), {
     points: [{ x: 1, y: 2 }, { x: 3, y: 4 }],
     path: 'M 1 2 L 3 4',
     distanceMeters: 12.5,
   });
+  const detour = {
+    closedSection: 'aisle 1 entrance',
+    firstAisle: 2,
+    via: 'back walkway' as const,
+    firstTurn: 'left' as const,
+  };
+  assert.deepEqual(
+    toProductRoute({ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }], meters: 40.9, detour }),
+    {
+      points: [{ x: 1, y: 2 }, { x: 3, y: 4 }],
+      path: 'M 1 2 L 3 4',
+      distanceMeters: 40.9,
+      detour,
+    },
+  );
 });
 
 test('resolveWalkEdges, closedWalkEdges, and findWalkEdgeAtPoint map segments and hit-test taps', () => {

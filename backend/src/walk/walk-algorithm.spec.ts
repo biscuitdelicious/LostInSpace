@@ -264,6 +264,12 @@ describe('walk graph algorithm', () => {
     expect(crossesClosure(steppedOn!)).toBe(false);
     expect(steppedOn!.points.some((point) => point.y === 55)).toBe(true);
     expect(steppedOn!.meters).toBeGreaterThan(2.5);
+    expect(steppedOn!.detour).toEqual({
+      closedSection: 'aisle 1 entrance',
+      firstAisle: 2,
+      via: 'back walkway',
+      firstTurn: 'left',
+    });
 
     // Stepping off at the junction follows the same rule.
     const steppedOff = shortestWalk(closed.nodes, closed.edges, pin, junction);
@@ -303,6 +309,93 @@ describe('walk graph algorithm', () => {
     expect(
       shortestWalk(sealed.nodes, sealed.edges, ENTRANCE_NODE, pin),
     ).toBeNull();
+  });
+
+  it('reports detour guidance only when a closure actually forces a longer walk', () => {
+    const open = seededGraph();
+    // Open graph: no detour metadata on a direct route.
+    const direct = shortestWalk(open.nodeRows, open.edgeRows, ENTRANCE_NODE, {
+      x: 525,
+      y: 138,
+    });
+    expect(direct?.detour).toBeUndefined();
+
+    // An unrelated closure (aisle 1 entrance) does not mark a walk to aisle 7 as a detour.
+    const closesAisle1Entrance = (fromKey: string, toKey: string) =>
+      [fromKey, toKey].includes('c79') && [fromKey, toKey].includes('a1_215');
+    const aisle1Closed = withBlockedEdge(closesAisle1Entrance);
+    const unaffected = shortestWalk(
+      aisle1Closed.nodes,
+      aisle1Closed.edges,
+      ENTRANCE_NODE,
+      { x: 525, y: 138 },
+    );
+    expect(unaffected?.detour).toBeUndefined();
+
+    // Closing the corridor beside the entrance forces a walk to aisle 7 up aisle 4 first.
+    const corridorClosed = withBlockedEdge(
+      (fromKey, toKey) =>
+        [fromKey, toKey].includes('c345') && [fromKey, toKey].includes('c387'),
+    );
+    const viaAisle4 = shortestWalk(
+      corridorClosed.nodes,
+      corridorClosed.edges,
+      ENTRANCE_NODE,
+      { x: 525, y: 138 },
+    );
+    expect(viaAisle4?.detour).toEqual({
+      closedSection: 'front corridor',
+      firstAisle: 4,
+      via: 'back walkway',
+      firstTurn: 'right',
+    });
+
+    // Standing right below aisle 2 with aisle 1 entrance closed goes straight up aisle 2.
+    const fromAisle2Junction = shortestWalk(
+      aisle1Closed.nodes,
+      aisle1Closed.edges,
+      { x: AISLE_CENTER_X[1], y: CORRIDOR_Y },
+      { x: AISLE_CENTER_X[0] + 14, y: 105 },
+    );
+    expect(fromAisle2Junction?.detour).toEqual({
+      closedSection: 'aisle 1 entrance',
+      firstAisle: 2,
+      via: 'back walkway',
+      firstTurn: 'straight',
+    });
+
+    // Already inside aisle 1 near the closed entrance, walking to aisle 2 leaves via the back walkway.
+    const leavingAisle1 = shortestWalk(
+      aisle1Closed.nodes,
+      aisle1Closed.edges,
+      { x: AISLE_CENTER_X[0], y: 200 },
+      { x: AISLE_CENTER_X[1] - 14, y: 180 },
+    );
+    expect(leavingAisle1?.detour).toEqual({
+      closedSection: 'aisle 1 entrance',
+      firstAisle: null,
+      via: 'back walkway',
+      firstTurn: 'right',
+    });
+
+    // Starting on the back walkway with the back of aisle 1 closed detours down aisle 2 and the front corridor.
+    const backClosed = withBlockedEdge(
+      (fromKey, toKey) =>
+        [fromKey, toKey].includes('a1_55') &&
+        [fromKey, toKey].includes('a1_88'),
+    );
+    const viaFront = shortestWalk(
+      backClosed.nodes,
+      backClosed.edges,
+      { x: AISLE_CENTER_X[0], y: 55 },
+      { x: AISLE_CENTER_X[0] + 14, y: 105 },
+    );
+    expect(viaFront?.detour).toEqual({
+      closedSection: 'back of aisle 1',
+      firstAisle: 2,
+      via: 'front corridor',
+      firstTurn: 'right',
+    });
   });
 
   it('treats a shelf in a single blocked aisle section as unreachable', () => {

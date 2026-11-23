@@ -144,6 +144,12 @@ describe('WalkService route API', () => {
     const route = detoured.stops[0].route;
     expect(route).not.toBeNull();
     expect(route!.meters).toBeGreaterThan(2.5);
+    expect(route!.detour).toEqual({
+      closedSection: 'aisle 1 entrance',
+      firstAisle: 2,
+      via: 'back walkway',
+      firstTurn: 'left',
+    });
     // No leg of the reply walks the closed strip x=79 between y=215..240.
     const walksClosedStrip = route!.points.some((point, index) => {
       if (index === 0) return false;
