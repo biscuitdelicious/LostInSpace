@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import { FALLBACK_PRODUCTS } from './products';
 import {
+  ENTRANCE_POINT,
   aisleCenterX,
+  departureHeading,
   formatDistance,
   routeDetourNotice,
   routeInstruction,
@@ -66,7 +68,6 @@ test('detour routes describe the real first turn and the closed section instead 
     'Turn into aisle 2, via back walkway to aisle 1',
   );
   assert.equal(routeDetourNotice(aisle2Detour), 'Aisle 1 entrance closed');
-  assert.equal(routeTurnDirection(bread, aisle2Detour), 'left');
 
   const straightDetour = {
     detour: {
@@ -80,7 +81,6 @@ test('detour routes describe the real first turn and the closed section instead 
     routeInstruction(bread, straightDetour),
     'Take aisle 2, via back walkway to aisle 1',
   );
-  assert.equal(routeTurnDirection(bread, straightDetour), 'straight');
 
   const backWalkwayDetour = {
     detour: {
@@ -94,7 +94,6 @@ test('detour routes describe the real first turn and the closed section instead 
     routeInstruction(bananas, backWalkwayDetour),
     'Take the back walkway to aisle 2',
   );
-  assert.equal(routeTurnDirection(bananas, backWalkwayDetour), 'right');
 
   const customDetour = {
     detour: {
@@ -107,4 +106,19 @@ test('detour routes describe the real first turn and the closed section instead 
   assert.equal(routeInstruction(bread, customDetour), 'Turn into aisle 2, then to aisle 1');
   assert.equal(routeDetourNotice(customDetour), 'Front corridor closed');
   assert.equal(routeDetourNotice(null), null);
+});
+
+test('the bread detour starts right from the aisle 1 junction and left from the entrance', () => {
+  const junction = { x: 79, y: 240 };
+  const corridor = { x: 345, y: 240 };
+  assert.equal(departureHeading([junction, { x: 156, y: 240 }, { x: 156, y: 215 }]), 'right');
+  assert.equal(departureHeading([ENTRANCE_POINT, corridor, { x: 310, y: 240 }, { x: 310, y: 215 }]), 'left');
+});
+
+test('only the entrance lead-in is skipped, not an initial aisle or diagonal walk', () => {
+  const aisle = { x: 156, y: 215 };
+  assert.equal(departureHeading([aisle, aisle, { x: 156, y: 55 }, { x: 79, y: 55 }]), 'up');
+  assert.equal(departureHeading([aisle, { x: 156, y: 240 }, { x: 79, y: 240 }]), 'down');
+  assert.equal(departureHeading([aisle, { x: 200, y: 165 }]), 'up-right');
+  assert.equal(departureHeading([aisle, aisle]), null);
 });

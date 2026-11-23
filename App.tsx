@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, AppState, GestureResponderEvent, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Activity, ArrowDown, ArrowDownToLine, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Clock3, ClipboardList, Fingerprint, Flag, LayoutGrid, LocateFixed, LockKeyhole, LockKeyholeOpen, LogOut, Map, MapPin, Menu, MoreHorizontal, Radio, Route, RouteOff, Plus, Search, Settings2, ShieldCheck, SlidersHorizontal, Wifi, X, Zap } from 'lucide-react-native';
+import { Activity, ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Bell, BookOpen, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Clock3, ClipboardList, Fingerprint, Flag, LayoutGrid, LocateFixed, LockKeyhole, LockKeyholeOpen, LogOut, Map, MapPin, Menu, MoreHorizontal, Radio, Route, RouteOff, Plus, Search, Settings2, ShieldCheck, SlidersHorizontal, Wifi, X, Zap } from 'lucide-react-native';
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { getBand, getChannel, initialDemoNetworks, signalQuality, WifiNetwork } from './src/wifi';
 import { FALLBACK_PRODUCTS, PRODUCT_SEARCH_DEBOUNCE_MS, fetchProducts, StoreProduct } from './src/products';
-import { ENTRANCE_POINT, MapPoint, ProductRoute, formatDistance, routeDetourNotice, routeInstruction, routeTurnDirection } from './src/route';
+import { ENTRANCE_POINT, MapPoint, ProductRoute, departureHeading, formatDistance, routeDetourNotice, routeInstruction, routeTurnDirection } from './src/route';
 import { EMPTY_SHOPPING_STATE, keepStableProduct, productForShopper, remainingTripDistance, shoppingReducer, type ShoppingRouteStatus, type ShoppingStop } from './src/shopping-list';
 import { callWalkApi, fetchWalkGraph, findWalkEdgeAtPoint, requestWalkRoute, resolveWalkEdges, toProductRoute, type WalkEdge, type WalkGraph } from './src/walk-graph';
 import { isShopperPositionFresh, loadShopperPosition, loadShopperPositionAsync, loadShoppingState, loadShoppingStateAsync, saveShoppingState, saveShoppingStateAsync } from './src/shopping-storage';
@@ -25,6 +25,15 @@ type Page = 'Wi-Fi Scanner' | 'Indoor Map' | 'Fingerprints' | 'Scan History' | '
 type ScanRecord = { id: number; time: Date; networks: WifiNetwork[]; demo: boolean };
 type Snapshot = { id: number; name: string; zone: string; networks: WifiNetwork[]; time: Date; demo: boolean };
 type IconType = typeof Wifi;
+
+const SHELF_ARROWS = {
+  left: [ArrowUpLeft, 'Turn left'], right: [ArrowUpRight, 'Turn right'], straight: [ArrowUp, 'Go straight'],
+} as const;
+
+const DEPARTURE_ICONS = {
+  up: ArrowUp, 'up-right': ArrowUpRight, right: ArrowRight, 'down-right': ArrowDownRight,
+  down: ArrowDown, 'down-left': ArrowDownLeft, left: ArrowLeft, 'up-left': ArrowUpLeft,
+};
 
 /** Pages shoppers must never see; they only exist in the hidden staff area. */
 const STAFF_ONLY_PAGES: Page[] = ['Wi-Fi Scanner', 'Fingerprints', 'Scan History', 'Location reports', 'Walk paths', 'Settings'];
@@ -1215,13 +1224,11 @@ function LisApp() {
   }
   const readyRoute = currentRouteStatus === 'ready' ? selectedRoute : null;
   const detourNotice = routeDetourNotice(readyRoute);
-  const bannerDirection = reporting
-    ? (reportSide ?? 'straight')
-    : currentProduct
-      ? routeTurnDirection(currentProduct, readyRoute)
-      : 'straight';
-  const BannerTurnIcon = bannerDirection === 'left' ? ArrowUpLeft : bannerDirection === 'right' ? ArrowUpRight : ArrowUp;
-  const bannerTurnLabel = bannerDirection === 'left' ? 'Turn left' : bannerDirection === 'right' ? 'Turn right' : 'Go straight';
+  const heading = !reporting && readyRoute?.detour ? departureHeading(readyRoute.points) : null;
+  const shelfDirection = reporting ? (reportSide ?? 'straight') : currentProduct ? routeTurnDirection(currentProduct) : 'straight';
+  const [BannerTurnIcon, bannerTurnLabel] = heading
+    ? [DEPARTURE_ICONS[heading], `Walk ${heading}`] as const
+    : SHELF_ARROWS[shelfDirection];
   const staffInitials = staffSession ? staffSession.username.slice(0, 2).toUpperCase() : 'ST';
   const allNavItems: { label: Page; icon: IconType }[] = [{ label: 'Wi-Fi Scanner', icon: Wifi }, { label: 'Indoor Map', icon: Map }, { label: 'Fingerprints', icon: Fingerprint }, { label: 'Scan History', icon: Clock3 }, { label: 'Location reports', icon: Flag }, { label: 'Walk paths', icon: Route }];
   // Walk-paths editor helpers: junction names for every connection end.

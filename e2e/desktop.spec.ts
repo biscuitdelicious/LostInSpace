@@ -701,7 +701,7 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await expect(bar.getByText('57.8 m from entrance', { exact: true })).toBeVisible({ timeout: 35_000 });
     await expect(banner.getByText('Turn into aisle 4, via back walkway to aisle 7', { exact: true })).toBeVisible();
     await expect(banner.getByText('Front corridor closed · 57.8 m to Whole Milk 1L', { exact: true })).toBeVisible();
-    await expect(banner.getByLabel('Turn right', { exact: true })).toBeVisible();
+    await expect(banner.getByLabel('Walk left', { exact: true })).toBeVisible();
     await expect.poll(() => routePathData(page)).toMatch(/(^| )\d+ 55( |$)/);
     const shopperMap = page.getByRole('img', { name: 'Store map', exact: true });
     await expect(shopperMap.getByLabel('Closed walkway: Corridor · entrance to aisle 5', { exact: true })).toBeVisible();
@@ -791,6 +791,10 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search store products', exact: true }).fill('sourdough');
     await page.getByRole('button', { name: /^Select product Sourdough Bread/ }).click();
+    await expect(banner.getByText('Turn into aisle 4, via back walkway to aisle 1', { exact: true })).toBeVisible();
+    const fromEntranceIcon = banner.getByLabel('Walk left', { exact: true }).locator('svg');
+    await expect(fromEntranceIcon).toBeVisible();
+    const leftGlyph = await fromEntranceIcon.innerHTML();
     await tapShopperPoint(page, { x: 79, y: 240 });
     const spotMeters = async () => {
       const text = (await bar.textContent()) ?? '';
@@ -800,7 +804,9 @@ test('walk edits replan open shopper routes and closed shelves never get a fallb
     await expect.poll(() => routePathData(page)).toMatch(/(^| )\d+ 55( |$)/);
     await expect(banner.getByText('Turn into aisle 2, via back walkway to aisle 1', { exact: true })).toBeVisible();
     await expect(banner.getByText(/^Aisle 1 entrance closed · [\d.]+ m to Sourdough Bread$/)).toBeVisible();
-    await expect(banner.getByLabel('Turn left', { exact: true })).toBeVisible();
+    const fromJunctionIcon = banner.getByLabel('Walk right', { exact: true }).locator('svg');
+    await expect(fromJunctionIcon).toBeVisible();
+    expect(await fromJunctionIcon.innerHTML()).not.toEqual(leftGlyph);
     await expect(banner.getByText('Turn into aisle 1, right side, top shelf', { exact: true })).toBeHidden();
 
     // Seal aisle 1's only other entrance: the shopper is told it is closed.

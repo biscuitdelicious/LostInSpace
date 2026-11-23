@@ -23,7 +23,7 @@ export type RouteDetour = {
   firstAisle: number | null;
   /** Connecting walkway taken around the closure, when applicable. */
   via: 'back walkway' | 'front corridor' | null;
-  /** Direction of the first turn along the detour. */
+  /** Turn at the named aisle or walkway, not the heading from the start. */
   firstTurn: 'left' | 'right' | 'straight';
 };
 
@@ -96,15 +96,32 @@ export function routeDetourNotice(
   return `${section[0].toUpperCase()}${section.slice(1)} closed`;
 }
 
-/**
- * Which direction the banner turn icon should point towards: the real first
- * turn on a detour, or the product's side of the aisle on a direct route.
- */
+const headings = ['right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'up', 'up-right'] as const;
+export type WalkHeading = (typeof headings)[number];
+
+/** Heading in store coordinates (facing in from the entrance), not the turn at a later aisle. */
+export function departureHeading(points: readonly MapPoint[]): WalkHeading | null {
+  const origin = points[0];
+  if (!origin) return null;
+  const atDoor = origin.x === ENTRANCE_POINT.x && origin.y === ENTRANCE_POINT.y;
+  let heading: WalkHeading | null = null;
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    if (Math.hypot(dx, dy) < 0.01) continue;
+    const octant = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+    heading = headings[(octant + 8) % 8];
+    // The door feeds straight into the corridor. Show which way to go there;
+    // for any other origin even a vertical first leg is the departure.
+    if (!(atDoor && dx === 0 && dy < 0)) break;
+  }
+  return heading;
+}
+
+/** Side indicated by the shelf instruction on a normal (non-detour) route. */
 export function routeTurnDirection(
   product: Pick<StoreProduct, 'aisleLocation' | 'aisleNumber' | 'mapX'>,
-  route?: Pick<ProductRoute, 'detour'> | null,
 ): 'left' | 'right' | 'straight' {
-  if (route?.detour) return route.detour.firstTurn;
   const parts = product.aisleLocation
     .split(',')
     .map((part) => part.trim())
