@@ -14,7 +14,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { LANDSCAPE_PLAN, PORTRAIT_PLAN, SHOPPER_HALO_RADIUS, aisleLabelPlacement, entranceTextBox, frameContains, frameCurrentStop, fullMapFrame, labelBoxOf, pinLabelPlacement, startLabelPlacement, startMarkerBox, viewBoxOf, walkEdgeTapBox, type MapFrame } from './src/map-frame';
 import { scanNetworks, supportsNativeScan } from './src/scanner';
 import { AisleTap, SHELF_LEVELS, SHELF_SIDES, ShelfLevel, ShelfSide, aisleFromTap, aisleTapPoint, shelfLocation, tapToStorePoint } from './src/shelf-location';
-import { confirmLocationReport, createLocationReport, fetchLocationReports, fetchReportDecision, LocationReport, rejectLocationReport } from './src/location-reports';
+import { confirmLocationReport, createLocationReport, fetchLocationReports, fetchReportDecision, LocationReport, rejectLocationReport, ReportAlreadyDecidedError } from './src/location-reports';
 import { StaffLoginThrottledError, StaffSessionInfo, StaffUnauthorizedError, clearStaffSession, clearStaffSessionAsync, formatLoginWait, loadStaffSession, loadStaffSessionAsync, loginStaff, logoutStaff, saveStaffSession, saveStaffSessionAsync, verifyStaffSession } from './src/staff-auth';
 
 /** How often an open list re-checks the store for moved products. */
@@ -501,6 +501,9 @@ function LisApp() {
   const [reportSending, setReportSending] = useState(false);
   const [locationReports, setLocationReports] = useState<LocationReport[]>([]);
   const [reportsError, setReportsError] = useState('');
+  // "Already decided" survives the list reload it triggers, unlike a
+  // fetch error, which the next load clears.
+  const [reportsConflict, setReportsConflict] = useState('');
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportBusyId, setReportBusyId] = useState<number | null>(null);
   const [reportsReload, setReportsReload] = useState(0);
@@ -1196,6 +1199,7 @@ function LisApp() {
     }
     setReportBusyId(id);
     setReportsError('');
+    setReportsConflict('');
     try {
       if (action === 'confirm') await confirmLocationReport(id, staffSession.token);
       else await rejectLocationReport(id, staffSession.token);
@@ -1204,6 +1208,13 @@ function LisApp() {
     } catch (err) {
       if (err instanceof StaffUnauthorizedError) {
         dropExpiredStaffSession();
+        return;
+      }
+      if (err instanceof ReportAlreadyDecidedError) {
+        // Someone else decided first: say what counted and show the list
+        // with that decision instead of leaving a stale pending row.
+        setReportsConflict(err.message);
+        setReportsReload((value) => value + 1);
         return;
       }
       setReportsError(err instanceof Error ? err.message : 'Could not update the report.');
@@ -1686,8 +1697,8 @@ function LisApp() {
     {page === 'Fingerprints' && <View style={s.largeCard}><View style={s.between}><Label style={s.cardTitle}>Your signal library</Label><Label style={s.cardSubtitle}>{snapshots.length} saved this session</Label></View>{snapshots.length ? snapshots.map(snapshot => <View key={snapshot.id} style={[s.historyRow, mobile && { flexWrap: 'wrap' }]}><View style={s.networkIcon}><Fingerprint color={C.green} size={21} /></View><View style={{ flex: 1 }}><Label style={{ fontWeight: '600' }}>{snapshot.name}</Label><Label style={s.cardSubtitle}>{snapshot.zone} · {snapshot.networks.length} access points · {snapshot.time.toLocaleTimeString()}</Label></View><Button title="View signals" small secondary onPress={() => { setNetworks(snapshot.networks); setDemo(snapshot.demo); setLastScan(snapshot.time); setZone(snapshot.zone); navigate('Wi-Fi Scanner'); setNotice(`Viewing fingerprint: ${snapshot.name}`); }} /></View>) : <View style={s.emptyState}><View style={s.emptyIcon}><Fingerprint size={35} color={C.green} strokeWidth={1.4} /></View><Label style={s.emptyTitle}>Give every place a signature.</Label><Label style={s.emptyText}>Save the current scan with a location name.{ '\n' }Your fingerprints stay available for this session.</Label><Button title="Save your first fingerprint" icon={Fingerprint} disabled={!networks.length} onPress={() => setDialog('save')} /></View>}</View>}
     {page === 'Scan History' && <View style={s.largeCard}><View style={s.between}><Label style={s.cardTitle}>Recent scans</Label><View style={s.row}><Label style={s.cardSubtitle}>This session</Label>{history.length > 0 && <IconButton icon={X} label="Clear scan history" onPress={() => { setHistory([]); setNotice('Scan history cleared.'); }} />}</View></View>{history.length ? history.map(record => <View key={record.id} style={s.historyRow}><View style={s.networkIcon}><Wifi size={20} color={C.green} /></View><View style={{ flex: 1 }}><Label style={{ fontWeight: '600', fontSize: 13 }}>{record.networks.length} networks discovered</Label><Label style={s.cardSubtitle}>{record.time.toLocaleTimeString()} · {record.demo ? 'Demo scan' : 'Device scan'}</Label></View><Button title="View scan" small secondary onPress={() => { setNetworks(record.networks); setDemo(record.demo); setLastScan(record.time); navigate('Wi-Fi Scanner'); }} /></View>) : <View style={s.emptyState}><View style={s.emptyIcon}><Clock3 size={35} color={C.green} strokeWidth={1.4} /></View><Label style={s.emptyTitle}>A fresh start.</Label><Label style={s.emptyText}>Your completed scans will appear here.{ '\n' }Run your first scan to see what’s around you.</Label><Button title="Go to scanner" onPress={() => navigate('Wi-Fi Scanner')} icon={ArrowRight} /></View>}</View>}
     {page === 'Location reports' && <View style={s.largeCard} accessibilityLabel="Location reports list">
-      <View style={s.between}><View style={{ flex: 1 }}><Label style={s.cardTitle}>Location reports</Label><Label style={s.cardSubtitle}>Only moved-shelf reports. Out of stock is not collected, because that would need a specific brand.</Label></View><Button small secondary title="Refresh" onPress={() => setReportsReload((value) => value + 1)} /></View>
-      {reportsError ? <View style={s.errorBanner}><CircleHelp size={18} color="#A46543" /><Label style={{ flex: 1, color: '#905332', fontSize: 12 }}>{reportsError}</Label></View> : null}
+      <View style={s.between}><View style={{ flex: 1 }}><Label style={s.cardTitle}>Location reports</Label><Label style={s.cardSubtitle}>Only moved-shelf reports. Out of stock is not collected, because that would need a specific brand.</Label></View><Button small secondary title="Refresh" onPress={() => { setReportsConflict(''); setReportsReload((value) => value + 1); }} /></View>
+      {(reportsConflict || reportsError) ? <View style={s.errorBanner}><CircleHelp size={18} color="#A46543" /><Label style={{ flex: 1, color: '#905332', fontSize: 12 }}>{reportsConflict || reportsError}</Label></View> : null}
       {reportsLoading ? <View style={s.emptyState}><ActivityIndicator color={C.green} /><Label style={s.emptyText}>Loading reports…</Label></View> : locationReports.length ? locationReports.map((report) => (
         <View key={report.id} accessibilityLabel={`Location report ${report.id} for ${report.productName}`} style={[s.historyRow, mobile && { flexWrap: 'wrap' }]}>
           <View style={s.networkIcon}><Flag size={18} color={report.status === 'pending' ? '#A56A32' : C.green} /></View>

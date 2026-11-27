@@ -1,5 +1,9 @@
 import { EntityManager } from '@mikro-orm/postgresql';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { AuthService } from '../auth/auth.service';
@@ -49,8 +53,32 @@ describe('LocationReports', () => {
       }
       return Promise.resolve(before - reports.length);
     }),
+    nativeUpdate: jest.fn(
+      (
+        entity: unknown,
+        where: { id?: number; status?: string },
+        data: { status?: string },
+      ) => {
+        if (entity !== ProductReport) return Promise.resolve(0);
+        const row = reports.find(
+          (report) =>
+            report.id === where.id &&
+            (where.status === undefined || report.status === where.status),
+        );
+        if (!row) return Promise.resolve(0);
+        Object.assign(row, data);
+        return Promise.resolve(1);
+      },
+    ),
     flush: jest.fn(() => Promise.resolve()),
+    clear: jest.fn(),
   };
+  // The real transactional() runs the callback on a connection-bound fork;
+  // the mock runs it on the same in-memory rows, which is enough to check
+  // the claim-then-move order and the loser's 409.
+  (fork as Record<string, unknown>).transactional = jest.fn(
+    (callback: (em: typeof fork) => Promise<unknown>) => callback(fork),
+  );
 
   let controller: LocationReportsController;
 
@@ -189,9 +217,19 @@ describe('LocationReports', () => {
         mapY: 142,
       }),
     );
-    await expect(controller.confirm(String(report.id))).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    // A second decision is refused with 409 and told what counted.
+    try {
+      await controller.confirm(String(report.id));
+      throw new Error('expected the second decision to be refused');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toMatchObject({
+        statusCode: 409,
+        message: 'This report was already confirmed.',
+        status: 'confirmed',
+        report: { id: report.id, status: 'confirmed' },
+      });
+    }
 
     milk.aisleLocation = 'Aisle 7, left, middle shelf';
     const second = await controller.create({
@@ -216,6 +254,43 @@ describe('LocationReports', () => {
     await expect(controller.get('404')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('a confirm and a reject racing on the same report: one counts, the other is told the decision, and the shelf matches', async () => {
+    for (let round = 0; round < 10; round += 1) {
+      milk.aisleLocation = 'Aisle 7, left, middle shelf';
+      milk.aisleNumber = 7;
+      milk.mapX = 525;
+      milk.mapY = 138;
+      const report = await controller.create({
+        productId: 1,
+        ...aisle2,
+        mapY: 142,
+      });
+      const results = await Promise.allSettled([
+        controller.confirm(String(report.id)),
+        controller.reject(String(report.id)),
+      ]);
+      const won = results.filter(
+        (result) => result.status === 'fulfilled',
+      ) as PromiseFulfilledResult<{ status: string }>[];
+      const lost = results.filter((result) => result.status === 'rejected');
+      expect(won).toHaveLength(1);
+      expect(lost).toHaveLength(1);
+      const decision = won[0].value.status;
+      expect(lost[0].reason).toBeInstanceOf(ConflictException);
+      expect((lost[0].reason as ConflictException).getResponse()).toMatchObject(
+        { status: decision },
+      );
+      expect((await controller.get(String(report.id))).status).toBe(decision);
+      if (decision === 'confirmed') {
+        expect(milk.aisleLocation).toBe('Aisle 2, left, middle shelf');
+        expect(milk.mapX).toBe(142);
+      } else {
+        expect(milk.aisleLocation).toBe('Aisle 7, left, middle shelf');
+        expect(milk.mapX).toBe(525);
+      }
+    }
   });
 
   it('staff can delete a report so test or duplicate rows never linger', async () => {

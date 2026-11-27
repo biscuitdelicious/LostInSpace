@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { Product } from '../src/products/product.entity';
 import { ProductReport } from '../src/reports/product-report.entity';
 import { AppModule } from './../src/app.module';
 
@@ -155,6 +156,93 @@ describe('Backend HTTP API (e2e)', () => {
         .get(EntityManager)
         .fork()
         .nativeDelete(ProductReport, { id: created.id });
+    }
+  });
+
+  it('two staff deciding the same report at once: one decision counts, the loser is told it, and the shelf matches', async () => {
+    const server = app.getHttpServer();
+    const username = (config.get<string>('STAFF_USERNAME') ?? 'staff').trim();
+    const password = config.get<string>('STAFF_PASSWORD') ?? '';
+    expect(password.length).toBeGreaterThan(0);
+    const loginRes = await request(server)
+      .post('/auth/login')
+      .send({ username, password })
+      .expect(200);
+    const { token } = loginRes.body as { token: string };
+    const auth = { Authorization: `Bearer ${token}` };
+
+    const productsRes = await request(server)
+      .get('/products?q=milk')
+      .expect(200);
+    const product = (
+      productsRes.body as {
+        id: number;
+        aisleLocation: string;
+        aisleNumber: number;
+        mapX: number;
+        mapY: number;
+      }[]
+    )[0];
+    const original = { ...product };
+    const createdIds: number[] = [];
+    try {
+      for (let round = 0; round < 10; round += 1) {
+        const createRes = await request(server)
+          .post('/product-reports')
+          .send({
+            productId: product.id,
+            aisleNumber: 5,
+            side: 'left',
+            shelf: 'top',
+            kind: 'moved',
+          })
+          .expect(201);
+        const id = (createRes.body as { id: number }).id;
+        createdIds.push(id);
+
+        const [confirmRes, rejectRes] = await Promise.all([
+          request(server).post(`/product-reports/${id}/confirm`).set(auth),
+          request(server).post(`/product-reports/${id}/reject`).set(auth),
+        ]);
+        const statuses = [confirmRes.status, rejectRes.status].sort();
+        expect(statuses).toEqual([201, 409]);
+        const winner = confirmRes.status === 201 ? confirmRes : rejectRes;
+        const loser = confirmRes.status === 409 ? confirmRes : rejectRes;
+        const decision = (winner.body as { status: string }).status;
+        expect(loser.body).toMatchObject({
+          statusCode: 409,
+          status: decision,
+          message: `This report was already ${decision}.`,
+        });
+
+        const finalRes = await request(server)
+          .get(`/product-reports/${id}`)
+          .expect(200);
+        expect((finalRes.body as { status: string }).status).toBe(decision);
+        const shelfRes = await request(server)
+          .get('/products?q=milk')
+          .expect(200);
+        const shelf = (
+          shelfRes.body as { id: number; aisleNumber: number }[]
+        ).find((item) => item.id === product.id)!;
+        expect(shelf.aisleNumber).toBe(
+          decision === 'confirmed' ? 5 : original.aisleNumber,
+        );
+      }
+    } finally {
+      const em = app.get(EntityManager).fork();
+      if (createdIds.length) {
+        await em.nativeDelete(ProductReport, { id: { $in: createdIds } });
+      }
+      const row = await em.findOne(Product, { id: product.id });
+      if (row) {
+        row.aisleLocation = original.aisleLocation;
+        row.aisleNumber = original.aisleNumber;
+        row.mapX = original.mapX;
+        row.mapY = original.mapY;
+        await em.flush();
+      }
+      await request(server).post('/auth/logout').set(auth).expect(200);
     }
   });
 });

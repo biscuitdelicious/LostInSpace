@@ -1,6 +1,7 @@
 import { EntityManager } from '@mikro-orm/postgresql';
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -100,25 +101,60 @@ export class LocationReportsService {
   }
 
   async confirm(id: number): Promise<LocationReportView> {
-    const fork = this.em.fork();
-    const report = await this.pendingReport(fork, id);
-    const product = await fork.findOne(Product, { id: report.product.id });
-    if (!product) throw new NotFoundException('Product not found');
-    product.aisleLocation = report.reportedAisleLocation;
-    product.aisleNumber = report.reportedAisleNumber;
-    product.mapX = report.reportedMapX;
-    product.mapY = report.reportedMapY;
-    report.status = 'confirmed';
-    await fork.flush();
-    return toView(report);
+    return this.decide(id, 'confirmed');
   }
 
   async reject(id: number): Promise<LocationReportView> {
+    return this.decide(id, 'rejected');
+  }
+
+  /**
+   * One decision per report, even when two staff members act at the same
+   * moment. The claim is a single conditional UPDATE — Postgres locks the
+   * row, so a racing decision waits for it and then matches zero rows —
+   * and the product move happens inside the same transaction as a winning
+   * confirm. The loser gets 409 with the decision that counted, and the
+   * product's shelf always matches the final status.
+   */
+  private async decide(
+    id: number,
+    status: 'confirmed' | 'rejected',
+  ): Promise<LocationReportView> {
     const fork = this.em.fork();
-    const report = await this.pendingReport(fork, id);
-    report.status = 'rejected';
-    await fork.flush();
-    return toView(report);
+    // Validate the id and existence first so bad requests keep their
+    // 400/404 answers without opening a transaction.
+    await this.findReport(fork, id);
+    return fork.transactional(async (em) => {
+      // The pre-check above cached the report as pending; the claim below
+      // writes straight to the database, so reload from there, not from
+      // the identity map.
+      em.clear();
+      const claimed = await em.nativeUpdate(
+        ProductReport,
+        { id, status: 'pending' },
+        { status },
+      );
+      if (!claimed) {
+        const current = await this.findReport(em, id);
+        throw new ConflictException({
+          statusCode: 409,
+          message: `This report was already ${current.status}.`,
+          status: current.status,
+          report: toView(current),
+        });
+      }
+      const report = await this.findReport(em, id);
+      if (status === 'confirmed') {
+        const product = await em.findOne(Product, { id: report.product.id });
+        if (!product) throw new NotFoundException('Product not found');
+        product.aisleLocation = report.reportedAisleLocation;
+        product.aisleNumber = report.reportedAisleNumber;
+        product.mapX = report.reportedMapX;
+        product.mapY = report.reportedMapY;
+        await em.flush();
+      }
+      return toView(report);
+    });
   }
 
   private async findReport(
@@ -134,19 +170,6 @@ export class LocationReportsService {
     );
     if (!report || report.kind !== REPORT_KIND)
       throw new NotFoundException('Report not found');
-    return report;
-  }
-
-  private async pendingReport(
-    fork: EntityManager,
-    id: number,
-  ): Promise<ProductReport> {
-    const report = await this.findReport(fork, id);
-    if (report.status !== 'pending') {
-      throw new BadRequestException(
-        'Only a pending report can be confirmed or rejected',
-      );
-    }
     return report;
   }
 }

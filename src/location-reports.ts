@@ -22,6 +22,17 @@ export type LocationReport = {
 /** The aisle the shopper tapped, plus the side and shelf they picked. */
 export type ReportChoice = AisleTap & { side: ShelfSide; shelf: ShelfLevel };
 
+/**
+ * Another staff member decided this report first. `status` is the decision
+ * that counted, so the UI can say what happened instead of a generic error.
+ */
+export class ReportAlreadyDecidedError extends Error {
+  constructor(message: string, readonly status: 'confirmed' | 'rejected') {
+    super(message);
+    this.name = 'ReportAlreadyDecidedError';
+  }
+}
+
 export async function createLocationReport(productId: number, choice: ReportChoice, baseUrl = resolveApiBaseUrl()): Promise<LocationReport> {
   return request(`${baseUrl}/product-reports`, {
     method: 'POST',
@@ -87,11 +98,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new Error('Could not reach the store backend. Start it and try again.');
   }
-  const body = await response.json().catch(() => null) as { message?: string | string[] } | null;
+  const body = await response.json().catch(() => null) as { message?: string | string[]; status?: string } | null;
   if (!response.ok) {
     const message = Array.isArray(body?.message) ? body.message.join(' ') : body?.message;
     if (response.status === 401) {
       throw new StaffUnauthorizedError(message || 'Staff sign-in required.');
+    }
+    if (response.status === 409 && (body?.status === 'confirmed' || body?.status === 'rejected')) {
+      throw new ReportAlreadyDecidedError(message || `This report was already ${body.status}.`, body.status);
     }
     throw new Error(message || `The store backend returned HTTP ${response.status}.`);
   }

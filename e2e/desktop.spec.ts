@@ -420,6 +420,48 @@ test('staff login gates #staff and backend refuses unauthenticated report list, 
   await expect(page.getByRole('button', { name: 'Fingerprints', exact: true })).toBeVisible();
 });
 
+test('a second staff decision on an already-decided report is told what counted, and the shelf stays put', async ({ page }) => {
+  // A shopper reports Whole Milk moved from aisle 7 to aisle 2.
+  const created = await page.request.post(`${testApiUrl}/product-reports`, {
+    data: { productId: 1, aisleNumber: 2, side: 'left', shelf: 'middle', kind: 'moved' },
+  });
+  expect(created.status()).toBe(201);
+  const report = (await created.json()) as { id: number };
+  const row = page.getByLabel(`Location report ${report.id} for Whole Milk 1L`, { exact: true });
+
+  // Another staff member signs in through the API and decides first.
+  const otherLogin = await page.request.post(`${testApiUrl}/auth/login`, { data: readStaffCredentials() });
+  expect(otherLogin.status()).toBe(200);
+  const { token: otherToken } = (await otherLogin.json()) as { token: string };
+  const otherHeaders = { Authorization: `Bearer ${otherToken}` };
+  try {
+    // This browser (beforeEach signed it in) opens the still-pending report.
+    await page.getByRole('button', { name: 'Location reports', exact: true }).click();
+    await expect(row.getByText('pending', { exact: true })).toBeVisible();
+    const confirmButton = page.getByRole('button', { name: `Confirm report ${report.id}`, exact: true });
+    await expect(confirmButton).toBeVisible();
+
+    // The other staff member rejects it while this list is on screen.
+    const otherReject = await page.request.post(`${testApiUrl}/product-reports/${report.id}/reject`, { headers: otherHeaders });
+    expect(otherReject.status()).toBe(201);
+
+    // Clicking Confirm now must not "succeed": it says what counted and
+    // refreshes the list to show the decision.
+    allowHttpErrors(page, { status: 409, urlEndsWith: `/product-reports/${report.id}/confirm` });
+    await confirmButton.click();
+    await expect(page.getByText('This report was already rejected.', { exact: true })).toBeVisible();
+    await expect(row.getByText('rejected', { exact: true })).toBeVisible();
+    await expect(confirmButton).toBeHidden();
+
+    // The product never moved: the shelf matches the rejected status.
+    const products = (await (await page.request.get(`${testApiUrl}/products?q=milk`)).json()) as { id: number; aisleNumber: number }[];
+    expect(products.find((product) => product.id === 1)!.aisleNumber).toBe(7);
+  } finally {
+    await page.request.delete(`${testApiUrl}/product-reports/${report.id}`, { headers: otherHeaders });
+    await page.request.post(`${testApiUrl}/auth/logout`, { headers: otherHeaders });
+  }
+});
+
 test('a guessing script waits whatever device ids it fakes, staff devices that signed in before still get in, and a guessing browser sees its own countdown', async ({ page }) => {
   test.setTimeout(150_000);
   const creds = readStaffCredentials();
