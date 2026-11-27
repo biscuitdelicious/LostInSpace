@@ -50,6 +50,12 @@ $ docker compose up -d      # starts PostgreSQL
   until `DB_PASSWORD` is set.
 - **`STAFF_PASSWORD` may stay empty**: then no staff account is created and
   the staff pages cannot be signed in to.
+- **Changing `STAFF_PASSWORD` signs everyone out.** The password is read at
+  startup, so restart the backend after editing `.env`. On the next start,
+  every device that signed in with the old password is signed out and has to
+  use the new one — that is how you cut off a leaked password or a lost
+  phone. Store data, reports and the account itself are untouched; only the
+  staff sign-ins end.
 - **PostgreSQL is only reachable from this machine.** `docker-compose.yml`
   publishes the port on `127.0.0.1`, so other devices on the same Wi-Fi or
   network cannot connect to it. Check with `docker port lis-postgres`: it

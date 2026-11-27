@@ -20,6 +20,13 @@ import { StaffLoginThrottledError, StaffSessionInfo, StaffUnauthorizedError, cle
 /** How often an open list re-checks the store for moved products. */
 const STORE_SYNC_INTERVAL_MS = 20000;
 
+/**
+ * How often a signed-in staff device re-confirms its session. A password
+ * change on the backend ends every session, and a phone left open on the
+ * staff area must notice and show the sign-in screen without being touched.
+ */
+const STAFF_SESSION_RECHECK_MS = 60000;
+
 const C = { green: '#286347', dark: '#173E2E', lime: '#D6F3B0', text: '#222A27', muted: '#858C88', line: '#E9ECE9', bg: '#F7F9F7', pale: '#EDF4EE' };
 type Page = 'Wi-Fi Scanner' | 'Indoor Map' | 'Fingerprints' | 'Scan History' | 'Location reports' | 'Walk paths' | 'Settings';
 type ScanRecord = { id: number; time: Date; networks: WifiNetwork[]; demo: boolean };
@@ -642,18 +649,22 @@ function LisApp() {
     if (!staffRequested || !staffSession?.token) return undefined;
     let cancelled = false;
     const activeToken = staffSession.token;
-    void verifyStaffSession(activeToken, undefined, staffSession.username).then((result) => {
-      if (cancelled || !mounted.current) return;
-      if (result.status === 'unauthorized') {
-        dropExpiredStaffSession();
-      } else if (result.status === 'valid' && result.username !== staffSession.username) {
-        const updated = { token: activeToken, username: result.username };
-        setStaffSession(updated);
-        if (Platform.OS === 'web') saveStaffSession(updated);
-        else void saveStaffSessionAsync(updated);
-      }
-    });
-    return () => { cancelled = true; };
+    const check = () => {
+      void verifyStaffSession(activeToken, undefined, staffSession.username).then((result) => {
+        if (cancelled || !mounted.current) return;
+        if (result.status === 'unauthorized') {
+          dropExpiredStaffSession();
+        } else if (result.status === 'valid' && result.username !== staffSession.username) {
+          const updated = { token: activeToken, username: result.username };
+          setStaffSession(updated);
+          if (Platform.OS === 'web') saveStaffSession(updated);
+          else void saveStaffSessionAsync(updated);
+        }
+      });
+    };
+    check();
+    const timer = setInterval(check, STAFF_SESSION_RECHECK_MS);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [staffRequested, staffSession?.token, staffSession?.username, dropExpiredStaffSession]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {

@@ -77,6 +77,7 @@ export class AuthService implements OnModuleInit {
       fork.create(StaffUser, {
         username,
         passwordHash: await hashPassword(password),
+        credentialsVersion: 1,
         createdAt: new Date(),
       });
       await fork.flush();
@@ -84,8 +85,18 @@ export class AuthService implements OnModuleInit {
     }
     const matches = await verifyPassword(password, existing.passwordHash);
     if (!matches) {
+      // The password in .env is the source of truth. Anyone who signed in
+      // with the old one loses their session — a changed password is how
+      // you cut off a leaked password or a lost phone.
       existing.passwordHash = await hashPassword(password);
+      existing.credentialsVersion = (existing.credentialsVersion ?? 1) + 1;
       await fork.flush();
+      const signedOut = await fork.nativeDelete(StaffSession, {
+        user: existing,
+      });
+      this.logger.log(
+        `STAFF_PASSWORD changed for "${username}"; signed out ${signedOut} staff session(s).`,
+      );
     }
   }
 
@@ -111,6 +122,7 @@ export class AuthService implements OnModuleInit {
       account.passwordHash = await hashPassword(
         randomBytes(32).toString('hex'),
       );
+      account.credentialsVersion = (account.credentialsVersion ?? 1) + 1;
       await fork.flush();
       await fork.nativeDelete(StaffSession, { user: account });
       this.logger.warn(
@@ -163,6 +175,8 @@ export class AuthService implements OnModuleInit {
     fork.create(StaffSession, {
       user,
       tokenHash: hashToken(token),
+      // A session lives only as long as the password it was opened with.
+      credentialsVersion: user.credentialsVersion ?? 1,
       createdAt: now,
       expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
     });
@@ -198,6 +212,16 @@ export class AuthService implements OnModuleInit {
         ? session.expiresAt
         : new Date(session.expiresAt);
     if (expiresAt.getTime() <= Date.now()) {
+      throw new UnauthorizedException('Staff sign-in required');
+    }
+    // Defense in depth: a session opened under an older password is refused
+    // even if its row survived the sign-out that followed the password
+    // change (e.g. two backends booting the same database).
+    if (
+      (session.credentialsVersion ?? 1) !==
+      (session.user.credentialsVersion ?? 1)
+    ) {
+      await fork.nativeDelete(StaffSession, { tokenHash: session.tokenHash });
       throw new UnauthorizedException('Staff sign-in required');
     }
     return { id: session.user.id, username: session.user.username };

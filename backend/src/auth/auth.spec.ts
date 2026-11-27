@@ -207,6 +207,100 @@ describe('Staff authentication', () => {
     expect(users[1].username).toBe('other');
   });
 
+  it('changing STAFF_PASSWORD signs out every device that signed in with the old one', async () => {
+    const log = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
+    envVars = {
+      STAFF_USERNAME: 'staff',
+      STAFF_PASSWORD: 'old-staff-secret-81',
+    };
+    await authService.onModuleInit();
+    const phones = [
+      await authController.login({
+        username: 'staff',
+        password: 'old-staff-secret-81',
+      }),
+      await authController.login({
+        username: 'staff',
+        password: 'old-staff-secret-81',
+      }),
+    ];
+    expect(users[0].credentialsVersion).toBe(1);
+    expect(sessions).toHaveLength(2);
+    for (const phone of phones) {
+      expect(
+        await guard.canActivate(
+          httpContext({
+            headers: { authorization: `Bearer ${phone.token}` },
+          }),
+        ),
+      ).toBe(true);
+    }
+
+    // A leaked password or a lost phone: the new password ends every
+    // session that the old one opened, on the same restart.
+    envVars = {
+      STAFF_USERNAME: 'staff',
+      STAFF_PASSWORD: 'new-staff-secret-52',
+    };
+    await authService.onModuleInit();
+    expect(users[0].credentialsVersion).toBe(2);
+    expect(sessions).toHaveLength(0);
+    for (const phone of phones) {
+      await expect(
+        guard.canActivate(
+          httpContext({
+            headers: { authorization: `Bearer ${phone.token}` },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    }
+    await expect(
+      authController.login({
+        username: 'staff',
+        password: 'old-staff-secret-81',
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('signed out 2 staff session(s)'),
+    );
+
+    // The new password signs in normally.
+    const fresh = await authController.login({
+      username: 'staff',
+      password: 'new-staff-secret-52',
+    });
+    expect(
+      await guard.canActivate(
+        httpContext({ headers: { authorization: `Bearer ${fresh.token}` } }),
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses and sweeps a session still carrying an older password version', async () => {
+    envVars = {
+      STAFF_USERNAME: 'staff',
+      STAFF_PASSWORD: 'current-staff-secret-17',
+    };
+    await authService.onModuleInit();
+    const login = await authController.login({
+      username: 'staff',
+      password: 'current-staff-secret-17',
+    });
+    expect(sessions).toHaveLength(1);
+
+    // Simulate a session row that survived a password change, for example
+    // because another backend deleted sessions while this one was writing.
+    sessions[0].credentialsVersion = (users[0].credentialsVersion ?? 1) - 1;
+    await expect(
+      guard.canActivate(
+        httpContext({ headers: { authorization: `Bearer ${login.token}` } }),
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(sessions).toHaveLength(0);
+  });
+
   it('never turns a sample password into a staff account, and disables accounts that still have one', async () => {
     // Copying .env.example unchanged used to create staff / <sample>.
     for (const sample of [

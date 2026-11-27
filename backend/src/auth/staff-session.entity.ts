@@ -12,6 +12,10 @@ export class StaffSession {
   @Property({ unique: true })
   tokenHash!: string;
 
+  /** The account's password version at sign-in; older sessions are refused. */
+  @Property()
+  credentialsVersion: number = 1;
+
   @Property()
   createdAt: Date = new Date();
 
