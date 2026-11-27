@@ -502,8 +502,9 @@ function LisApp() {
   const [locationReports, setLocationReports] = useState<LocationReport[]>([]);
   const [reportsError, setReportsError] = useState('');
   // "Already decided" survives the list reload it triggers, unlike a
-  // fetch error, which the next load clears.
-  const [reportsConflict, setReportsConflict] = useState('');
+  // fetch error, which the next load clears. It remembers which report it
+  // is about so that row can say so too.
+  const [reportsConflict, setReportsConflict] = useState<{ id: number; message: string; status: 'confirmed' | 'rejected' } | null>(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportBusyId, setReportBusyId] = useState<number | null>(null);
   const [reportsReload, setReportsReload] = useState(0);
@@ -1199,7 +1200,7 @@ function LisApp() {
     }
     setReportBusyId(id);
     setReportsError('');
-    setReportsConflict('');
+    setReportsConflict(null);
     try {
       if (action === 'confirm') await confirmLocationReport(id, staffSession.token);
       else await rejectLocationReport(id, staffSession.token);
@@ -1213,7 +1214,7 @@ function LisApp() {
       if (err instanceof ReportAlreadyDecidedError) {
         // Someone else decided first: say what counted and show the list
         // with that decision instead of leaving a stale pending row.
-        setReportsConflict(err.message);
+        setReportsConflict({ id, message: err.message, status: err.status });
         setReportsReload((value) => value + 1);
         return;
       }
@@ -1697,16 +1698,19 @@ function LisApp() {
     {page === 'Fingerprints' && <View style={s.largeCard}><View style={s.between}><Label style={s.cardTitle}>Your signal library</Label><Label style={s.cardSubtitle}>{snapshots.length} saved this session</Label></View>{snapshots.length ? snapshots.map(snapshot => <View key={snapshot.id} style={[s.historyRow, mobile && { flexWrap: 'wrap' }]}><View style={s.networkIcon}><Fingerprint color={C.green} size={21} /></View><View style={{ flex: 1 }}><Label style={{ fontWeight: '600' }}>{snapshot.name}</Label><Label style={s.cardSubtitle}>{snapshot.zone} · {snapshot.networks.length} access points · {snapshot.time.toLocaleTimeString()}</Label></View><Button title="View signals" small secondary onPress={() => { setNetworks(snapshot.networks); setDemo(snapshot.demo); setLastScan(snapshot.time); setZone(snapshot.zone); navigate('Wi-Fi Scanner'); setNotice(`Viewing fingerprint: ${snapshot.name}`); }} /></View>) : <View style={s.emptyState}><View style={s.emptyIcon}><Fingerprint size={35} color={C.green} strokeWidth={1.4} /></View><Label style={s.emptyTitle}>Give every place a signature.</Label><Label style={s.emptyText}>Save the current scan with a location name.{ '\n' }Your fingerprints stay available for this session.</Label><Button title="Save your first fingerprint" icon={Fingerprint} disabled={!networks.length} onPress={() => setDialog('save')} /></View>}</View>}
     {page === 'Scan History' && <View style={s.largeCard}><View style={s.between}><Label style={s.cardTitle}>Recent scans</Label><View style={s.row}><Label style={s.cardSubtitle}>This session</Label>{history.length > 0 && <IconButton icon={X} label="Clear scan history" onPress={() => { setHistory([]); setNotice('Scan history cleared.'); }} />}</View></View>{history.length ? history.map(record => <View key={record.id} style={s.historyRow}><View style={s.networkIcon}><Wifi size={20} color={C.green} /></View><View style={{ flex: 1 }}><Label style={{ fontWeight: '600', fontSize: 13 }}>{record.networks.length} networks discovered</Label><Label style={s.cardSubtitle}>{record.time.toLocaleTimeString()} · {record.demo ? 'Demo scan' : 'Device scan'}</Label></View><Button title="View scan" small secondary onPress={() => { setNetworks(record.networks); setDemo(record.demo); setLastScan(record.time); navigate('Wi-Fi Scanner'); }} /></View>) : <View style={s.emptyState}><View style={s.emptyIcon}><Clock3 size={35} color={C.green} strokeWidth={1.4} /></View><Label style={s.emptyTitle}>A fresh start.</Label><Label style={s.emptyText}>Your completed scans will appear here.{ '\n' }Run your first scan to see what’s around you.</Label><Button title="Go to scanner" onPress={() => navigate('Wi-Fi Scanner')} icon={ArrowRight} /></View>}</View>}
     {page === 'Location reports' && <View style={s.largeCard} accessibilityLabel="Location reports list">
-      <View style={s.between}><View style={{ flex: 1 }}><Label style={s.cardTitle}>Location reports</Label><Label style={s.cardSubtitle}>Only moved-shelf reports. Out of stock is not collected, because that would need a specific brand.</Label></View><Button small secondary title="Refresh" onPress={() => { setReportsConflict(''); setReportsReload((value) => value + 1); }} /></View>
-      {(reportsConflict || reportsError) ? <View style={s.errorBanner}><CircleHelp size={18} color="#A46543" /><Label style={{ flex: 1, color: '#905332', fontSize: 12 }}>{reportsConflict || reportsError}</Label></View> : null}
+      <View style={s.between}><View style={{ flex: 1 }}><Label style={s.cardTitle}>Location reports</Label><Label style={s.cardSubtitle}>Only moved-shelf reports. Out of stock is not collected, because that would need a specific brand.</Label></View><Button small secondary title="Refresh" onPress={() => { setReportsConflict(null); setReportsReload((value) => value + 1); }} /></View>
+      {reportsConflict ? <View style={s.errorBanner} accessibilityLabel="Report already decided"><CircleHelp size={18} color="#A46543" /><Label style={{ flex: 1, color: '#905332', fontSize: 12 }}>{reportsConflict.message}</Label></View> : reportsError ? <View style={s.errorBanner}><CircleHelp size={18} color="#A46543" /><Label style={{ flex: 1, color: '#905332', fontSize: 12 }}>{reportsError}</Label></View> : null}
       {reportsLoading ? <View style={s.emptyState}><ActivityIndicator color={C.green} /><Label style={s.emptyText}>Loading reports…</Label></View> : locationReports.length ? locationReports.map((report) => (
-        <View key={report.id} accessibilityLabel={`Location report ${report.id} for ${report.productName}`} style={[s.historyRow, mobile && { flexWrap: 'wrap' }]}>
+        <View key={report.id} accessibilityLabel={`Location report ${report.id} for ${report.productName}`} style={[s.historyRow, mobile && { flexWrap: 'wrap' }, reportsConflict?.id === report.id && { backgroundColor: '#FFF4EA', borderRadius: 12 }]}>
           <View style={s.networkIcon}><Flag size={18} color={report.status === 'pending' ? '#A56A32' : C.green} /></View>
           <View style={{ flex: 1, minWidth: 180 }}>
             <Label style={{ fontWeight: '600' }}>{report.productName}</Label>
             <Label style={s.cardSubtitle}>Was: {report.originalAisleLocation}</Label>
             <Label style={s.cardSubtitle}>Reported: {report.reportedAisleLocation}</Label>
             <Label style={s.reportStatus}>{report.status}</Label>
+            {reportsConflict?.id === report.id && report.status !== 'pending' ? (
+              <Label style={{ color: '#905332', fontSize: 12, marginTop: 2 }}>Someone else {report.status} this before your decision.</Label>
+            ) : null}
           </View>
           {report.status === 'pending' && (
             <View style={[s.row, { gap: 8, flexWrap: 'wrap' }]}>

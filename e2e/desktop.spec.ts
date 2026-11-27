@@ -420,14 +420,28 @@ test('staff login gates #staff and backend refuses unauthenticated report list, 
   await expect(page.getByRole('button', { name: 'Fingerprints', exact: true })).toBeVisible();
 });
 
-test('a second staff decision on an already-decided report is told what counted, and the shelf stays put', async ({ page }) => {
-  // A shopper reports Whole Milk moved from aisle 7 to aisle 2.
-  const created = await page.request.post(`${testApiUrl}/product-reports`, {
-    data: { productId: 1, aisleNumber: 2, side: 'left', shelf: 'middle', kind: 'moved' },
-  });
-  expect(created.status()).toBe(201);
-  const report = (await created.json()) as { id: number };
-  const row = page.getByLabel(`Location report ${report.id} for Whole Milk 1L`, { exact: true });
+test('a second staff decision on an already-decided report names the product and report, and the shelf stays put', async ({ page }) => {
+  type ApiProduct = { id: number; name: string; aisleLocation: string; aisleNumber: number };
+  const findProduct = async (query: string, name: string) => {
+    const products = (await (await page.request.get(`${testApiUrl}/products?q=${query}`)).json()) as ApiProduct[];
+    const product = products.find((item) => item.name === name);
+    expect(product, name).toBeTruthy();
+    return product!;
+  };
+  const report = async (productId: number, aisleNumber: number, side: string, shelf: string) => {
+    const created = await page.request.post(`${testApiUrl}/product-reports`, {
+      data: { productId, aisleNumber, side, shelf, kind: 'moved' },
+    });
+    expect(created.status()).toBe(201);
+    return ((await created.json()) as { id: number }).id;
+  };
+  const bread = await findProduct('sourdough', 'Sourdough Bread');
+  const milk = await findProduct('milk', 'Whole Milk 1L');
+  const coffee = await findProduct('coffee', 'Roasted Arabica Coffee');
+  // The reported case: two other reports stay pending while the bread one is decided elsewhere.
+  const breadReport = await report(bread.id, 6, 'left', 'top');
+  const others = [await report(milk.id, 2, 'left', 'middle'), await report(coffee.id, 4, 'right', 'bottom')];
+  const breadRow = page.getByLabel(`Location report ${breadReport} for Sourdough Bread`, { exact: true });
 
   // Another staff member signs in through the API and decides first.
   const otherLogin = await page.request.post(`${testApiUrl}/auth/login`, { data: readStaffCredentials() });
@@ -435,29 +449,39 @@ test('a second staff decision on an already-decided report is told what counted,
   const { token: otherToken } = (await otherLogin.json()) as { token: string };
   const otherHeaders = { Authorization: `Bearer ${otherToken}` };
   try {
-    // This browser (beforeEach signed it in) opens the still-pending report.
+    // This browser (beforeEach signed it in) opens the still-pending reports.
     await page.getByRole('button', { name: 'Location reports', exact: true }).click();
-    await expect(row.getByText('pending', { exact: true })).toBeVisible();
-    const confirmButton = page.getByRole('button', { name: `Confirm report ${report.id}`, exact: true });
-    await expect(confirmButton).toBeVisible();
+    await expect(breadRow.getByText('pending', { exact: true })).toBeVisible();
+    const confirmBread = page.getByRole('button', { name: `Confirm report ${breadReport}`, exact: true });
+    await expect(confirmBread).toBeVisible();
 
-    // The other staff member rejects it while this list is on screen.
-    const otherReject = await page.request.post(`${testApiUrl}/product-reports/${report.id}/reject`, { headers: otherHeaders });
+    // The other staff member rejects the bread report while this list is on screen.
+    const otherReject = await page.request.post(`${testApiUrl}/product-reports/${breadReport}/reject`, { headers: otherHeaders });
     expect(otherReject.status()).toBe(201);
 
-    // Clicking Confirm now must not "succeed": it says what counted and
-    // refreshes the list to show the decision.
-    allowHttpErrors(page, { status: 409, urlEndsWith: `/product-reports/${report.id}/confirm` });
-    await confirmButton.click();
-    await expect(page.getByText('This report was already rejected.', { exact: true })).toBeVisible();
-    await expect(row.getByText('rejected', { exact: true })).toBeVisible();
-    await expect(confirmButton).toBeHidden();
+    // Pressing Confirm move on the stale row says exactly which report was
+    // decided and how, while the other two stay pending and unmarked.
+    allowHttpErrors(page, { status: 409, urlEndsWith: `/product-reports/${breadReport}/confirm` });
+    await confirmBread.click();
+    const notice = page.getByLabel('Report already decided', { exact: true });
+    await expect(notice.getByText(
+      `Someone already rejected the Sourdough Bread report to Aisle 6, left, top shelf (report ${breadReport}). Sourdough Bread stays on ${bread.aisleLocation}.`,
+      { exact: true },
+    )).toBeVisible();
+    await expect(breadRow.getByText('rejected', { exact: true })).toBeVisible();
+    await expect(breadRow.getByText('Someone else rejected this before your decision.', { exact: true })).toBeVisible();
+    await expect(confirmBread).toBeHidden();
+    for (const id of others) {
+      await expect(page.getByRole('button', { name: `Confirm report ${id}`, exact: true })).toBeVisible();
+      await expect(page.getByLabel(new RegExp(`^Location report ${id} for `)).getByText('Someone else', { exact: false })).toHaveCount(0);
+    }
 
     // The product never moved: the shelf matches the rejected status.
-    const products = (await (await page.request.get(`${testApiUrl}/products?q=milk`)).json()) as { id: number; aisleNumber: number }[];
-    expect(products.find((product) => product.id === 1)!.aisleNumber).toBe(7);
+    expect((await findProduct('sourdough', 'Sourdough Bread')).aisleNumber).toBe(bread.aisleNumber);
   } finally {
-    await page.request.delete(`${testApiUrl}/product-reports/${report.id}`, { headers: otherHeaders });
+    for (const id of [breadReport, ...others]) {
+      await page.request.delete(`${testApiUrl}/product-reports/${id}`, { headers: otherHeaders });
+    }
     await page.request.post(`${testApiUrl}/auth/logout`, { headers: otherHeaders });
   }
 });

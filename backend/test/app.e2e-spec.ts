@@ -185,8 +185,54 @@ describe('Backend HTTP API (e2e)', () => {
     )[0];
     const original = { ...product };
     const createdIds: number[] = [];
+    // Every round starts from the original shelf. Without this, a round
+    // won by confirm leaves the product in aisle 5, and a later round won
+    // by reject would wrongly expect the original aisle.
+    const restoreShelf = async () => {
+      const em = app.get(EntityManager).fork();
+      const row = await em.findOne(Product, { id: product.id });
+      if (!row) return;
+      row.aisleLocation = original.aisleLocation;
+      row.aisleNumber = original.aisleNumber;
+      row.mapX = original.mapX;
+      row.mapY = original.mapY;
+      await em.flush();
+    };
+    type Decide = (id: number) => Promise<[request.Response, request.Response]>;
+    const confirmThenReject: Decide = async (id) => {
+      const confirmRes = await request(server)
+        .post(`/product-reports/${id}/confirm`)
+        .set(auth);
+      const rejectRes = await request(server)
+        .post(`/product-reports/${id}/reject`)
+        .set(auth);
+      return [confirmRes, rejectRes];
+    };
+    const rejectThenConfirm: Decide = async (id) => {
+      const rejectRes = await request(server)
+        .post(`/product-reports/${id}/reject`)
+        .set(auth);
+      const confirmRes = await request(server)
+        .post(`/product-reports/${id}/confirm`)
+        .set(auth);
+      return [confirmRes, rejectRes];
+    };
+    const atOnce: Decide = (id) =>
+      Promise.all([
+        request(server).post(`/product-reports/${id}/confirm`).set(auth),
+        request(server).post(`/product-reports/${id}/reject`).set(auth),
+      ]);
+    // Pinned first: a confirm round followed by a reject round — the
+    // sequence that once leaked aisle 5 into the next round's expectation —
+    // then ten real races.
+    const rounds: Decide[] = [
+      confirmThenReject,
+      rejectThenConfirm,
+      ...Array.from({ length: 10 }, () => atOnce),
+    ];
     try {
-      for (let round = 0; round < 10; round += 1) {
+      for (const decide of rounds) {
+        await restoreShelf();
         const createRes = await request(server)
           .post('/product-reports')
           .send({
@@ -200,19 +246,25 @@ describe('Backend HTTP API (e2e)', () => {
         const id = (createRes.body as { id: number }).id;
         createdIds.push(id);
 
-        const [confirmRes, rejectRes] = await Promise.all([
-          request(server).post(`/product-reports/${id}/confirm`).set(auth),
-          request(server).post(`/product-reports/${id}/reject`).set(auth),
-        ]);
+        const [confirmRes, rejectRes] = await decide(id);
         const statuses = [confirmRes.status, rejectRes.status].sort();
         expect(statuses).toEqual([201, 409]);
         const winner = confirmRes.status === 201 ? confirmRes : rejectRes;
         const loser = confirmRes.status === 409 ? confirmRes : rejectRes;
         const decision = (winner.body as { status: string }).status;
+        const reported = (createRes.body as { reportedAisleLocation: string })
+          .reportedAisleLocation;
+        const productName = (createRes.body as { productName: string })
+          .productName;
+        const shelfAfter =
+          decision === 'confirmed' ? reported : original.aisleLocation;
         expect(loser.body).toMatchObject({
           statusCode: 409,
           status: decision,
-          message: `This report was already ${decision}.`,
+          message:
+            decision === 'confirmed'
+              ? `Someone already confirmed the ${productName} report to ${reported} (report ${id}). ${productName} is now on ${shelfAfter}.`
+              : `Someone already rejected the ${productName} report to ${reported} (report ${id}). ${productName} stays on ${shelfAfter}.`,
         });
 
         const finalRes = await request(server)
@@ -234,14 +286,7 @@ describe('Backend HTTP API (e2e)', () => {
       if (createdIds.length) {
         await em.nativeDelete(ProductReport, { id: { $in: createdIds } });
       }
-      const row = await em.findOne(Product, { id: product.id });
-      if (row) {
-        row.aisleLocation = original.aisleLocation;
-        row.aisleNumber = original.aisleNumber;
-        row.mapX = original.mapX;
-        row.mapY = original.mapY;
-        await em.flush();
-      }
+      await restoreShelf();
       await request(server).post('/auth/logout').set(auth).expect(200);
     }
   });

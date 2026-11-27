@@ -225,7 +225,7 @@ describe('LocationReports', () => {
       expect(error).toBeInstanceOf(ConflictException);
       expect((error as ConflictException).getResponse()).toMatchObject({
         statusCode: 409,
-        message: 'This report was already confirmed.',
+        message: `Someone already confirmed the Whole Milk 1L report to Aisle 2, left, middle shelf (report ${report.id}). Whole Milk 1L is now on Aisle 2, left, middle shelf.`,
         status: 'confirmed',
         report: { id: report.id, status: 'confirmed' },
       });

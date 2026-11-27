@@ -138,7 +138,10 @@ export class LocationReportsService {
         const current = await this.findReport(em, id);
         throw new ConflictException({
           statusCode: 409,
-          message: `This report was already ${current.status}.`,
+          message: alreadyDecidedMessage(
+            toView(current),
+            current.product.aisleLocation,
+          ),
           status: current.status,
           report: toView(current),
         });
@@ -229,6 +232,26 @@ function readStatus(status: string): ReportStatus {
   throw new BadRequestException(
     'status must be pending, confirmed, or rejected',
   );
+}
+
+/**
+ * What the second staff member is told when someone else decided first:
+ * which product, which reported shelf, which report, the decision that
+ * counted, and where the product is now — so they never have to hunt for
+ * the row that changed.
+ */
+export function alreadyDecidedMessage(
+  report: Pick<
+    LocationReportView,
+    'id' | 'productName' | 'reportedAisleLocation' | 'status'
+  >,
+  currentShelf: string,
+): string {
+  const which = `the ${report.productName} report to ${report.reportedAisleLocation} (report ${report.id})`;
+  if (report.status === 'confirmed') {
+    return `Someone already confirmed ${which}. ${report.productName} is now on ${currentShelf}.`;
+  }
+  return `Someone already rejected ${which}. ${report.productName} stays on ${currentShelf}.`;
 }
 
 export function toView(report: ProductReport): LocationReportView {
